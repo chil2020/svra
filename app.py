@@ -23,6 +23,8 @@ from linebot.v3.webhooks import (
 from faster_whisper import WhisperModel
 import os
 
+import requests
+
 # 運行LineBot
 app = Flask(__name__)
 
@@ -102,13 +104,32 @@ def handle_audio(event):
         #     event.reply_token,
         #     TextMessage(text=transcription)
         # )
-        line_bot_api.reply_message_with_http_info(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=transcription)]
-            )
-        )
+        messages = ''
+        # line_bot_api.reply_message_with_http_info(
+        #     ReplyMessageRequest(
+        #         reply_token=event.reply_token,
+        #         messages=[TextMessage(text=transcription)]
+        #     )
+        # )
+        messages=[TextMessage(text=transcription)]
+        print(messages[0].text)
     
+        url = "https://memos-archie.fly.dev/api/v1/memo"
+
+        headers = {
+            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InYxIiwidHlwIjoiSldUIn0.eyJuYW1lIjoiIiwiaXNzIjoibWVtb3MiLCJzdWIiOiIxIiwiYXVkIjpbInVzZXIuYWNjZXNzLXRva2VuIl0sImV4cCI6NDg2NjQwMzI1OCwiaWF0IjoxNzEyODAzMjU4fQ.wBF1WMj3Lizwktcrn5Vvc9YTRRiq-V6S7AQcf17IZjg"
+        }
+
+        payload = {
+            "content": messages[0].text,
+            "visibility": "PUBLIC",
+            "resourceIdList": []
+        }
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            print("Memo pushed successfully")
+        else:
+            print(f"Error: {response.status_code} - {response.text}")
     # 刪除暫存的語音檔案
     os.remove(audio_path)
     
