@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: svra-core
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/svra}
+    username: ${POSTGRES_USER:svra}
+    password: ${POSTGRES_PASSWORD:svra-dev-only}
+  jpa:
+    hibernate:
+      ddl-auto: validate # schema 一律走 Flyway，JPA 只驗證
+    open-in-view: false
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:svra}
+    password: ${RABBITMQ_PASSWORD:svra-dev-only}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+svra:
+  line:
+    channel-secret: ${LINE_CHANNEL_SECRET:}
+    channel-access-token: ${LINE_CHANNEL_ACCESS_TOKEN:}
+  audio-dir: ${AUDIO_DIR:./data/audio}
+  # 佇列名稱需與 whisper-worker/main.py 的 topology 一致
+  mq:
+    exchange: svra.direct
+    job-routing-key: transcribe.job
+    result-queue: transcribe.results
+    dlq: transcribe.jobs.dlq
+
+anthropic:
+  api-key: ${ANTHROPIC_API_KEY:}

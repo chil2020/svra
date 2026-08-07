@@ -1,0 +1,3 @@
+{"id": "todo-001", "input": "幫我記一下下週二早上十點要跟牙醫約診", "expected": {"category": "行程", "fields": {"time": "下週二 10:00", "title": "牙醫約診", "people": [], "tags": ["健康"]}}}
+{"id": "todo-002", "input": "嗯就是那個 要記得繳信用卡費 月底前", "expected": {"category": "待辦", "fields": {"time": "月底前", "title": "繳信用卡費", "people": [], "tags": ["財務"]}}}
+{"id": "idea-001", "input": "剛剛想到履歷上系統效能提升那段可以用佇列深度當量測指標來講", "expected": {"category": "想法", "fields": {"time": null, "title": "履歷效能故事用佇列深度量測", "people": [], "tags": ["求職", "履歷"]}}}

@@ -1,0 +1,3 @@
+# 進到專案目錄後執行 `sdk env` 即切到此版本（CDP 舊碼要跑時另裝 17：sdk install java 17.0.x-tem）
+java=21.0.11-tem
+maven=3.9.16

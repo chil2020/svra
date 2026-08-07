@@ -1,0 +1,22 @@
+# 環境與憑證 —— 絕不入版控
+.env
+*.env.local
+
+# Java / Maven
+target/
+*.class
+*.jar
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 執行期資料
+data/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
