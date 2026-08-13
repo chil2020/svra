@@ -1,15 +1,16 @@
 # gitleaks 設定
 #
-# 背景：2026/08/07 GitGuardian 通報本 repo 有 4 筆憑證外洩。
-# 確認結果：
-#   ・LINE Channel Access Token（2024/05）—— 真的，已重新發行，舊的失效
-#   ・memos JWT（2024/06）—— 真的，exp 解出來是 2124 年（等同永不過期），已撤銷
-#   ・Generic Password ×2（2026/08）—— 誤報，是 docker-compose 的 `svra-dev-only` 佔位值
+# 背景：2026/08/07 GitGuardian 通報本 repo 有 4 筆憑證外洩。確認後：
+#   ・LINE Channel Access Token（2024/05）—— 真的
+#   ・memos JWT（2024/06）—— 真的，exp 解出來是 2124 年，等同永不過期
+#   ・Generic Password ×2 —— 誤報，是 docker-compose 的 `svra-dev-only` 佔位值
 #
-# 處置順序是刻意的：**先撤銷憑證，再處理 code**。
-# 已經公開兩年的字串靠改 code 收不回來，只有讓它失效才是止血。
-# 歷史保留不改寫，理由是：憑證已失效、字串已無用，而重寫歷史會讓所有 commit SHA 變動，
-# 對一個已經公開的 repo 來說代價大於效益。改成用 allowlist 明確標記「這幾筆是已知且已處理的」。
+# 處置順序是刻意的：
+#   1. 先重新發行憑證 —— 已公開兩年的字串靠改 code 收不回來，只有讓它失效才是止血
+#   2. 再清歷史 —— git filter-repo 把兩筆憑證從所有 commit 抹除（日期與訊息保留）
+#   3. 最後加防線 —— 就是這個檔案，讓同樣的事不會再發生
+#
+# 順序不能倒過來。先清 code 只是清理現場，憑證還活著的話一點用都沒有。
 
 title = "SVRA gitleaks config"
 
@@ -17,25 +18,13 @@ title = "SVRA gitleaks config"
 useDefault = true   # 沿用官方規則集，只加白名單，不放寬偵測
 
 # ── 自訂規則：LINE Channel Access Token ───────────────────────────────
-# 官方規則集沒有 LINE 的樣式，實測放行 —— 而那正是 2024 年漏掉的那一個。
-# 特徵：160 字元以上的 base64，結尾為 '='。
+# 官方規則集沒有 LINE 的樣式，實測會直接放行 —— 而那正是 2024 年漏掉的那一個。
+# 特徵：160 字元以上的 base64，結尾可能有 '='。
 [[rules]]
 id = "line-channel-access-token"
 description = "LINE Channel Access Token"
 regex = '''(?i)(line[_-]?(channel[_-]?)?access[_-]?token|Configuration\()\s*[=:(]\s*['"][A-Za-z0-9+/]{160,}={0,2}['"]'''
 tags = ["line", "token"]
-
-# ── 已知且已處理的歷史事故 ────────────────────────────────────────────
-# 只放行這 5 個特定 commit。之後任何新 commit 帶進憑證，一樣會讓 CI 紅燈。
-[[allowlists]]
-description = "2024 年 app.py 的 LINE token 與 memos JWT —— 憑證已撤銷，保留歷史"
-commits = [
-  "d2ec622e371efa3a96e167d2df53f005ceac3b9c",  # first commit
-  "fec8289c0c41062c574d85b3e7807c67b24e77da",  # 根據最新的 sdk 更新程式碼
-  "87a63dcf01539028d84fd3f4210895090a0f0749",  # 將所辨識的語音訊息同步到 memos
-  "b27175b7af718cb3e08e2edc735020d53601d2a4",  # Create README.md
-  "c663ce2f25e9f061dfedecd14093258d46e0a8eb",  # Update README.md
-]
 
 # ── 本機開發用的佔位值 ────────────────────────────────────────────────
 # docker-compose 與 application.yml 的預設值刻意寫成 svra-dev-only，
@@ -48,7 +37,7 @@ regexes = [
 
 # ── 測試用的簽章 fixture ──────────────────────────────────────────────
 # LineWebhookControllerTest 的 VALID_SIGNATURE 是用測試用的假 channel secret
-# 算出來的 HMAC 結果，不是任何線上系統的憑證。
+# 算出來的 HMAC 預期值，不是任何線上系統的憑證。
 [[allowlists]]
 description = "webhook 驗簽測試的預期值"
 paths = [
