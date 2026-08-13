@@ -20,3 +20,6 @@ data/
 *.iml
 .vscode/
 .DS_Store
+
+# 本機工作清單，不入版控
+core/TODO.md
