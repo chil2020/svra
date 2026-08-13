@@ -5,6 +5,21 @@ on:
   pull_request:
 
 jobs:
+  # 2026/08：GitGuardian 通報 2024 年的 app.py 有 LINE token 與 memos JWT 外洩。
+  # 處置順序刻意是「先撤銷憑證止血 → 再加防線」，因為已公開的字串靠清 code 收不回來。
+  # 這一關掃全歷史，避免同樣的事再發生。
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks 要掃完整歷史，不能只拿最新一版
+      - name: Scan for hardcoded secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   core:
     runs-on: ubuntu-latest
     steps:
