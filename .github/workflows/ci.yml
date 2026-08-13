@@ -14,11 +14,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # gitleaks 要掃完整歷史，不能只拿最新一版
-      - name: Scan for hardcoded secrets
-        uses: gitleaks/gitleaks-action@v2
+      # 直接跑執行檔而不用 gitleaks-action：版本可以釘死，
+      # CI 的結果才會跟本機 `gitleaks detect` 完全一致。
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install -m 755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Scan for hardcoded secrets
+        run: gitleaks detect --config .gitleaks.toml --redact --no-banner --verbose
 
   core:
     runs-on: ubuntu-latest
