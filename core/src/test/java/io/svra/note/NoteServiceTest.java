@@ -11,7 +11,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import tools.jackson.databind.ObjectMapper;
 
-import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -121,9 +120,7 @@ class NoteServiceTest {
 
     // ── U7：套用轉錄結果 ──────────────────────────────────────────
 
-    private static TranscribeResult completedResult(String text) {
-        return new TranscribeResult(MESSAGE_ID, "completed", text, "zh", 3.2f, 1.8f, "small");
-    }
+
 
     @Test
     @DisplayName("收到結果 → 補上內容並轉為 COMPLETED")
@@ -131,7 +128,7 @@ class NoteServiceTest {
         Note note = Note.pending(USER_ID, MESSAGE_ID);
         when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(of(note));
 
-        noteService.applyTranscription(completedResult("記得繳電費"));
+        noteService.applyTranscription(MESSAGE_ID, "記得繳電費", "zh", 3.2f);
 
         assertThat(note.getStatus()).isEqualTo(NoteStatus.COMPLETED);
         assertThat(note.getTranscript()).isEqualTo("記得繳電費");
@@ -146,7 +143,7 @@ class NoteServiceTest {
         note.complete("第一次的結果", "zh", 3.2f);
         when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(of(note));
 
-        noteService.applyTranscription(completedResult("第二次的結果"));
+        noteService.applyTranscription(MESSAGE_ID, "第二次的結果", "zh", 3.2f);
 
         assertThat(note.getTranscript()).isEqualTo("第一次的結果");
     }
@@ -156,7 +153,7 @@ class NoteServiceTest {
     void missingNoteDoesNotThrow() {
         when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(empty());
 
-        assertThatCode(() -> noteService.applyTranscription(completedResult("內容")))
+        assertThatCode(() -> noteService.applyTranscription(MESSAGE_ID, "內容", "zh", 3.2f))
                 .doesNotThrowAnyException();
     }
 

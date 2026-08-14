@@ -36,6 +36,7 @@ public class TranscribeResultListener {
                 result.jobId(), result.status(),
                 result.text() == null ? 0 : result.text().length());
 
-        noteService.applyTranscription(result);
+        noteService.applyTranscription(
+                result.jobId(), result.text(), result.language(), result.audioDurationSec());
     }
 }

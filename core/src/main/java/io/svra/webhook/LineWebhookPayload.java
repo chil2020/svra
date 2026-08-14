@@ -1,4 +1,4 @@
-package io.svra.line;
+package io.svra.webhook;
 
 import java.util.List;
 

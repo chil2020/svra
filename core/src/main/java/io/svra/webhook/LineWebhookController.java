@@ -1,4 +1,4 @@
-package io.svra.line;
+package io.svra.webhook;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
+import io.svra.line.LineProperties;
 
 /**
  * 驗簽寫在 Controller 而不是 Filter：HMAC 要對原始 body 算，而 body 是一次性的

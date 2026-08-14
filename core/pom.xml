@@ -31,6 +31,13 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>org.springframework.modulith</groupId>
+                <artifactId>spring-modulith-bom</artifactId>
+                <version>2.1.0</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -94,6 +101,21 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
+        <!--
+            讓「不要跨 package 亂呼叫」從慣例變成測試會失敗的約束。
+            決策 7 靠 package-private 擋一部分，但擋不住 public 型別之間的
+            相依——這個補上那一段。
+        -->
+        <dependency>
+            <groupId>org.springframework.modulith</groupId>
+            <artifactId>spring-modulith-starter-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.modulith</groupId>
+            <artifactId>spring-modulith-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Boot 4 把 @WebMvcTest 從 spring-boot-test-autoconfigure 拆到獨立模組 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

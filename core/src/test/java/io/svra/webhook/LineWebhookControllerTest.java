@@ -1,4 +1,4 @@
-package io.svra.line;
+package io.svra.webhook;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,6 +17,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import io.svra.line.LineProperties;
 
 /**
  * 契約：正確簽章 → 200；簽章錯誤或沒帶 header → 401。

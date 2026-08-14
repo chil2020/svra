@@ -33,6 +33,7 @@
 | ✅ | LLM 結構化抽取：Spring AI ＋ 地端 Ollama，含領域驗證與帶錯誤重試 |
 | ✅ | 結果推播回 LINE |
 | ✅ | 文字指令：刪除／改標題／改時間，用引用回覆定位 |
+| ✅ | Spring Modulith 模組邊界驗證（`ApplicationModules.verify()`） |
 | 📋 | RAG 與向量檢索（見 [Future Work](#future-work)） |
 
 端到端已用真實 LINE 語音驗證：webhook → 驗簽 → note+outbox 同交易 →
@@ -173,21 +174,26 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 > （先反序列化再序列化回來會因空白／欄位順序差異導致簽章對不上）；
 > 比對用 `MessageDigest.isEqual()` 而非 `equals()`——固定時間比較，避免 timing attack。
 
-### 7. Package by feature，不是 by layer
+### 7. Package by feature，並讓邊界成為會失敗的測試
 
-**決策**：`io.svra.{line, note, outbox, mq, extract, notify, command}`，
-而不是 `{controller, service, repository, entity}`。
+**決策**：`io.svra.{webhook, line, note, outbox, mq, extract, notify, command}`，
+而不是 `{controller, service, repository, entity}`。加上 Spring Modulith 的
+`ApplicationModules.verify()`。
 
 **為什麼**：這是事件驅動系統，邊界天生清楚。按功能切的話，
-**一個變更只動一個資料夾**，而且可以用 package-private 真正擋住跨模組呼叫——
-按層切的話所有東西都必須 public，沒有任何機制防止亂呼叫。
+**一個變更只動一個資料夾**，而且可以用 package-private 真正擋住跨模組呼叫。
 
-**實體歸領域，不歸功能**：`note/` 放 `Note`、`NoteExtraction`、`NoteItem`
-與其 repository；`extract`／`notify`／`command` 是三個各自獨立的功能，
-都消費同一個領域模型。這樣 package-private 擋的是「功能之間不要互相呼叫」，
-而不是「不要碰實體」。
+分成三層責任：
 
-實際效果是每個功能 package 對外只露出一個入口：
+| | package | 責任 |
+|---|---|---|
+| 入站 | `webhook/` | LINE 對我們說話：驗簽、解析、分派 |
+| 出站 | `line/` | 我們對 LINE 說話：下載音檔、推播 |
+| 領域 | `note/` | `Note`、`NoteExtraction`、`NoteItem` 與其 repository |
+| 基礎設施 | `outbox/`、`mq/` | 事件轉送、佇列 topology |
+| 功能 | `extract/`、`notify/`、`command/` | 各自消費領域模型 |
+
+每個功能 package 對外只露出一個入口，其餘收成 package-private：
 
 | package | 對外可見 | 收在裡面 |
 |---|---|---|
@@ -197,15 +203,33 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 
 **放棄了什麼**：不如分層直覺（多數教學文都是分層），新人上手需要適應。
 
-> 這則決策踩過一次：加推播與指令功能時，我把它們放進了 `extract/`——
-> 因為實體已經在那裡。那是 by-layer 的慣性：按「技術上相依什麼」放，
-> 而不是按「這是什麼功能」放。發現後才搬成現在的樣子，順手把只在單一
-> package 內使用的類別收成 package-private——**那個收斂就是這則決策的實際回報**，
-> 不搬的話拿不到。
+#### 這則決策踩過兩次，第二次是工具抓到的
 
-> 注意：controller／service／repository 三層並沒有消失，只是住在各自的
-> feature 資料夾裡。計畫加上 Spring Modulith 的 `ApplicationModules.verify()`
-> 讓邊界從慣例變成測試期的約束（見 Future Work）。
+**第一次**：加推播與指令功能時，我把它們放進了 `extract/`——因為實體已經在那裡。
+那是 by-layer 的慣性：按「技術上相依什麼」放，而不是按「這是什麼功能」放。
+
+**第二次**：搬完之後看起來很整齊，`ApplicationModules.verify()` 一跑就爆出環狀依賴。
+**檔案位置對了，相依方向還是纏的：**
+
+```
+outbox  ↔ 每一個功能   poller 用 switch 認識全部四種事件，功能又回頭寫 outbox
+line    ↔ command      控制器呼叫指令服務，指令服務又用 LinePushClient
+note    ↔ mq           NoteService 的參數型別是 RabbitMQ 的訊息格式
+```
+
+三個都是真的設計問題，不是工具太嚴格：
+
+- **基礎設施不該認識業務**。poller 改成只認識 `OutboxEventHandler` 介面，
+  各功能自己實作並註冊——加新事件型別不用改 poller。
+- **入站與出站是相反方向**，放同一個 package 必然成環。`webhook/` 與 `line/` 拆開後，
+  `line/` 對其他模組零依賴。
+- **領域不該認識傳輸格式**。`applyTranscription` 原本收 `TranscribeResult`
+  （帶著 `@JsonProperty` 與 status／elapsedSec），改成收四個值，翻譯由 listener 做。
+
+> **package-private 擋得住細節外流，擋不住 public 型別之間的相依。**
+> 前者靠切法，後者只有工具擋得住——所以 `ApplicationModules.verify()` 不是加分項，
+> 是讓這則決策從慣例變成約束的那一步。`Documenter` 會一併產出模組關係圖，
+> 結構的變化在 review 時看得見。
 
 ### 8. Schema 由 Flyway 單一管理，JPA 只驗證
 
@@ -332,7 +356,8 @@ OLLAMA_MODEL=llama3.1:8b ./run-core.sh
 ```
 ├── core/             # Spring Boot 核心（開發清單見 core/TODO.md）
 │   └── src/main/java/io/svra/
-│       ├── line/         # LINE adapter：webhook 驗簽、音檔下載
+│       ├── webhook/      # 入站：LINE webhook 驗簽、事件解析與分派
+│       ├── line/         # 出站：音檔下載、推播（對其他模組零依賴）
 │       ├── note/         # 領域核心：Note / NoteExtraction / NoteItem 與其 repository
 │       ├── outbox/       # Transactional Outbox：事件表、poller、退避重試
 │       ├── mq/           # RabbitMQ topology、job/result 契約、結果 listener
@@ -388,11 +413,6 @@ Micrometer 自訂指標（佇列深度、轉錄 P95、token 用量）＋ Prometh
 graceful shutdown（`server.shutdown=graceful` ＋ preStop 等摘流量）、
 liveness/readiness probe 分工、以及 JVM 在容器裡要用 `-XX:MaxRAMPercentage`
 而非寫死 `-Xmx`（否則看不見 cgroup 限制，會被 OOMKilled）。
-
-### Spring Modulith 邊界驗證
-
-用 `ApplicationModules.verify()` 讓「跨 package 亂呼叫」變成**編譯／測試期的失敗**，
-並用 `Documenter` 自動產出模組關係圖。約一小時的投入。
 
 ### Multi-tenancy & Privacy
 

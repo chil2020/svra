@@ -9,7 +9,6 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
-import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -80,29 +79,34 @@ public class NoteService {
     /**
      * 把轉錄結果寫回對應的 note。
      *
+     * <p>刻意收下四個值而不是 {@code TranscribeResult}——那是 RabbitMQ 的訊息格式，
+     * 帶著 {@code @JsonProperty} 與 status／elapsedSec 這些傳輸層的東西。
+     * 領域不該認識傳輸格式，翻譯由 listener 做。
+     *
      * <p>
      * 🔴 承重點：必須冪等。outbox 是 at-least-once，同一個結果可能回來兩次。
      */
     @Transactional
-    public void applyTranscription(TranscribeResult result) {
-        noteRepository.findBySourceMessageId(result.jobId()).ifPresentOrElse(
+    public void applyTranscription(String sourceMessageId, String text,
+            String language, Float audioDurationSec) {
+        noteRepository.findBySourceMessageId(sourceMessageId).ifPresentOrElse(
                 note -> {
                     // 已完成就不覆蓋。結果可能重複回來（outbox 是 at-least-once），
                     // whisper 用 beam search 兩次結果可能有微小差異，
                     // 讓使用者看到的內容莫名其妙變動不划算。
                     if (note.getStatus() != NoteStatus.COMPLETED) {
-                        note.complete(result.text(), result.language(), result.audioDurationSec());
+                        note.complete(text, language, audioDurationSec);
                         // 抽取要呼叫 LLM，好幾秒。放這裡會拖長交易也卡住 listener——
                         // 跟「下載音檔不放在 webhook」同一個判斷，交給 outbox 非同步做。
                         outboxRepository.save(OutboxEvent.pending(
-                                result.jobId(),
+                                sourceMessageId,
                                 EVENT_EXTRACT_REQUESTED,
-                                toPayload(note.getLineUserId(), result.jobId())));
+                                toPayload(note.getLineUserId(), sourceMessageId)));
                     }
                 },
                 // 不能丟例外——listener 拋出去會讓訊息 requeue 成無限迴圈。
                 // 也補不出新的 note：結果訊息裡沒有 lineUserId，而該欄位是 NOT NULL。
-                () -> log.error("找不到對應的 note：messageId={}", result.jobId()));
+                () -> log.error("找不到對應的 note：messageId={}", sourceMessageId));
     }
 
     /**
