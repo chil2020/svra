@@ -26,7 +26,7 @@
 |------|------|
 | ✅ | LINE webhook 接收：HMAC-SHA256 驗簽、秒回 200 |
 | ✅ | `notes` schema（Flyway）＋ JPA entity／repository，含冪等唯一鍵 |
-| ✅ | Python whisper worker（faster-whisper） |
+| ✅ | 轉錄 worker：faster-whisper ＋ Breeze-ASR-25（台灣調校） |
 | ✅ | docker-compose：PostgreSQL(pgvector) / RabbitMQ / Redis / worker |
 | ✅ | Transactional Outbox：音檔下載與 `transcribe.job` 發佈，含指數退避與 DLQ |
 | ✅ | 轉錄結果消費、冪等去重 |
@@ -34,13 +34,15 @@
 | ✅ | 結果推播回 LINE |
 | ✅ | 文字指令：刪除／改標題／改時間，用引用回覆定位 |
 | ✅ | Spring Modulith 模組邊界驗證（`ApplicationModules.verify()`） |
-| ✅ | 抽取層 eval 集（8 題，含跨欄位一致性檢查） |
+| ✅ | 抽取層 eval 集（8 題，prompt 迭代到 v6，8/8） |
 | 📋 | RAG 與向量檢索（見 [Future Work](#future-work)） |
 
 端到端已用真實 LINE 語音驗證：webhook → 驗簽 → note+outbox 同交易 →
 poller 下載音檔 → RabbitMQ → whisper → 結果回寫 → LLM 抽取 → 推播回 LINE。
 使用者可以引用推播訊息、用一句話修改或刪除其中的項目。
 **全程在本機執行，不呼叫任何付費 API。**
+
+**全程在本機執行**：語音轉錄與語意抽取都是地端模型，不呼叫任何付費 API。
 
 範圍凍結日：2026-08-18。凍結後的項目一律進 [Future Work](#future-work)，
 但**每一項都會寫清楚「評估過、決定不做、理由是什麼」**——因為說得出取捨，
@@ -67,7 +69,7 @@ flowchart LR
 | 組件 | 技術 | 職責 |
 |------|------|------|
 | core | Java 21 / Spring Boot 4.1 | Webhook 接收與驗簽、Outbox 編排、LLM 抽取 |
-| whisper-worker | Python / faster-whisper | 語音轉文字（無狀態，可水平擴展） |
+| whisper-worker | Python / faster-whisper ＋ Breeze-ASR-25 | 語音轉文字（無狀態，可水平擴展） |
 | 佇列 | RabbitMQ | 任務分派、DLQ 補償 |
 | 儲存 | PostgreSQL | 筆記本體、outbox 事件、抽取結果（pgvector 已備妥） |
 | LLM | Spring AI ＋ Ollama | 結構化抽取，地端執行 |
@@ -260,8 +262,9 @@ NoteExtractor.java           0 行   ← 呼叫端沒動
 跑地端還有兩個附帶好處：**成本歸零**，以及**語音筆記不離開自己的機器**。
 
 **放棄了什麼**：地端 9B 模型的推理不如雲端旗艦。實測同一段逐字稿，
-專有名詞的轉錄錯誤（「奮起湖」被 Whisper 轉成「正啟湖」）它照原樣保留——
-符合 prompt 裡「判斷不出來就照原樣」的規則，但更強的模型能從上下文修正。
+曾經有個案例：Whisper 把「奮起湖」轉成「正啟湖」，抽取層照原樣保留——
+符合 prompt 裡「判斷不出來就照原樣」的規則。**後來才發現那不是抽取層的問題**，
+換掉 ASR 模型之後就沒了（見決策 14）。
 
 **什麼情況會反悔**：抽取準確率成為瓶頸時就換模型。`note_extractions`
 表的存在就是為了這個——換模型不覆蓋舊結果，兩版並存後再決定用哪個。
@@ -320,7 +323,34 @@ LINE 的引用功能把這個狀態**放在訊息本身**：使用者指哪則�
 
 **放棄了什麼**：多信任 LLM 一個欄位——它可能漏報，或把做到的事誤報成沒做到。
 
-### 13. Redis 只做快取與限流
+### 13. ASR 用台灣調校的 Breeze-ASR-25，不是更大的 Whisper
+
+**決策**：轉錄模型從 `whisper small` 換成聯發科的 `Breeze-ASR-25`（Whisper large-v2 為底，
+已轉成 CTranslate2，可直接餵給 faster-whisper）。
+
+**為什麼**：抽取層的 eval 是 8/8，但實際用起來還是有錯——**錯在上游**。
+拿同一段（有背景音的）錄音跑三方比較：
+
+| | 奮起湖 | KKday | 轉錄耗時 |
+|---|---|---|---|
+| `small`（原本） | ✖ 正啟湖 | ✖ KKM | 6s |
+| `large-v3`（單純變大） | ✔ | ✖ 認不出 | 31s |
+| `Breeze-ASR-25`（台灣調校） | ✔ | ✔ | 33s |
+
+**第二欄是關鍵**：`KKday` 是中英夾雜，`large-v3` 也修不好，只有台灣調校版能處理——
+證明差別來自訓練資料而不是參數量。順帶修好「重新被組成」→「從新北土城」、
+「QQ客戶」→「QR code」。
+
+**放棄了什麼**：轉錄從 6 秒變 33 秒，模型從 244MB 變 1.5GB。
+這個代價架構已經吸收了——轉錄本來就是非同步的，使用者等 30 秒或 40 秒沒有差別。
+**這是「重活丟佇列」那個決策的回報**：它讓後來的品質升級不需要動架構。
+
+**試過但撤回的**：VAD（先切掉非語音段落）。直覺上對有背景音的錄音應該有幫助，
+實測反而丟字——「奮起湖」在 VAD 開的時候消失。這段是連續獨白、幾乎沒有靜默，
+VAD 沒東西可切，只在語音邊界削掉內容。**理由留在程式碼旁邊**，之後遇到大量靜默
+或幻覺迴圈的錄音再回頭量一次。
+
+### 14. Redis 只做快取與限流
 
 **決策**：Redis 用於「同輸入快取」與 per-user rate limit，**不作為資料真相來源**。
 
@@ -338,6 +368,8 @@ docker compose up -d      # postgres + rabbitmq + redis + whisper-worker
 # 地端 LLM（抽取層用，不需要任何付費 API）
 brew install ollama && brew services start ollama
 ollama pull qwen3.5:9b    # 約 6.6 GB，建議 16 GB 以上記憶體
+
+# 轉錄模型（Breeze-ASR-25）首次啟動時自動下載約 1.5 GB，快取在 docker volume
 
 # core 在本機跑（預設值已指向 compose 與 localhost:11434）
 ./run-core.sh
