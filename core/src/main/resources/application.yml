@@ -29,13 +29,19 @@ svra:
   line:
     channel-secret: ${LINE_CHANNEL_SECRET:}
     channel-access-token: ${LINE_CHANNEL_ACCESS_TOKEN:}
+  # 相對路徑依啟動目錄而定；與 worker 共用時建議用絕對路徑或設 AUDIO_DIR
   audio-dir: ${AUDIO_DIR:./data/audio}
+  outbox:
+    poll-interval-ms: 2000
   # 佇列名稱需與 whisper-worker/main.py 的 topology 一致
   mq:
     exchange: svra.direct
+    dlx: svra.dlx
+    job-queue: transcribe.jobs
     job-routing-key: transcribe.job
+    job-dlq: transcribe.jobs.dlq
     result-queue: transcribe.results
-    dlq: transcribe.jobs.dlq
+    result-routing-key: transcribe.result
 
 anthropic:
   api-key: ${ANTHROPIC_API_KEY:}

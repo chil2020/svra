@@ -3,7 +3,11 @@
 消費 RabbitMQ 上的語音轉錄任務，用 faster-whisper 轉出文字後發布結果。
 
 任務訊息（transcribe.jobs）:
-    {"job_id": "...", "audio_path": "/data/audio/xxx.m4a", "language_hint": "zh"}
+    {"job_id": "...", "audio_file": "xxx.m4a", "language_hint": "zh"}
+
+    audio_file 只帶檔名，實際路徑由本端的 AUDIO_DIR 組出來——
+    core 與 worker 對同一個共享目錄的掛載點不同，把對方的檔案系統配置
+    寫進訊息契約會讓部署方式綁死在協定上。
 
 結果訊息（transcribe.results）:
     {"job_id": "...", "status": "completed", "text": "...", "language": "zh",
@@ -34,6 +38,8 @@ JOB_QUEUE = os.getenv("JOB_QUEUE", "transcribe.jobs")
 JOB_ROUTING_KEY = os.getenv("JOB_ROUTING_KEY", "transcribe.job")
 RESULT_QUEUE = os.getenv("RESULT_QUEUE", "transcribe.results")
 RESULT_ROUTING_KEY = os.getenv("RESULT_ROUTING_KEY", "transcribe.result")
+
+AUDIO_DIR = os.getenv("AUDIO_DIR", "/data/audio")
 
 MODEL_NAME = os.getenv("WHISPER_MODEL", "small")
 DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
@@ -82,7 +88,7 @@ def handle_job(ch, method, properties, body):
     try:
         job = json.loads(body)
         job_id = job["job_id"]
-        audio_path = job["audio_path"]
+        audio_path = os.path.join(AUDIO_DIR, job["audio_file"])
     except (json.JSONDecodeError, KeyError):
         log.exception("malformed job message, sending to DLQ: %r", body[:500])
         ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
