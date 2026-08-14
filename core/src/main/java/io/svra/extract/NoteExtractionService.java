@@ -60,7 +60,8 @@ public class NoteExtractionService {
             return;
         }
 
-        List<NoteItem> items = extractor.extract(note.getTranscript());
+        // 用 note 的建立時間當基準：「明天」指的是錄音那天的明天。
+        List<NoteItem> items = extractor.extract(note.getTranscript(), note.getCreatedAt());
         if (items.isEmpty()) {
             log.warn("抽不出任何項目：messageId={}", sourceMessageId);
             return;

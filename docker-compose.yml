@@ -48,7 +48,7 @@ services:
     build: ./whisper-worker
     environment:
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-svra}:${RABBITMQ_PASSWORD:-svra-dev-only}@rabbitmq:5672/
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL: ${WHISPER_MODEL:-phate334/Breeze-ASR-25-ct2}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
     volumes:

@@ -1,7 +1,6 @@
 package io.svra.extract;
 
 import java.time.Instant;
-import java.time.Clock;
 import java.time.LocalDate;
 import java.time.format.TextStyle;
 import java.time.ZoneId;
@@ -28,7 +27,7 @@ class NoteExtractor {
     private static final Logger log = LoggerFactory.getLogger(NoteExtractor.class);
 
     /** 改 prompt 就要改這個，才比較得出「是模型的差異還是 prompt 的差異」。 */
-    public static final String PROMPT_VERSION = "v3";
+    public static final String PROMPT_VERSION = "v5";
 
     private static final int MAX_ATTEMPTS = 2;
 
@@ -43,7 +42,9 @@ class NoteExtractor {
             - category：TODO 待辦事項｜SCHEDULE 有明確時間的行程｜IDEA 想法或靈感
             - title 一句話講完，30 字以內
             - occursAt 用 ISO-8601（例如 2026-08-15T09:00:00+08:00）。
-              只講到日期沒講時間就用當天 09:00。完全沒提到時間就填 null
+              只講到日期沒講時間就用當天 09:00。完全沒提到時間就填 null。
+        下面有日曆表不代表每一筆都要有時間——想法（IDEA）多半沒有時間，
+        使用者沒說時間就是 null，不要拿今天的日期去填
             - 逐字稿裡沒有的資訊不要自己補
             - 明顯是轉錄錯誤的專有名詞，若能從上下文判斷就修正，判斷不出來就照原樣
 
@@ -52,27 +53,23 @@ class NoteExtractor {
             """;
 
     private final ChatClient chatClient;
-    private final Clock clock;
     private final ZoneId zone = ZoneId.of("Asia/Taipei");
 
-    /**
-     * 時鐘用注入的而不是 {@code LocalDate.now()}——「明天」「下週二」要能驗算，
-     * 而寫死的 now() 讓 eval 每天跑出不同結果，相對日期的案例全部會腐爛。
-     */
-    NoteExtractor(ChatClient.Builder builder, Clock clock) {
+    NoteExtractor(ChatClient.Builder builder) {
         this.chatClient = builder.build();
-        this.clock = clock;
     }
 
     /**
      * @param transcript 語音轉錄的逐字稿
+     * @param recordedAt 錄音當下的時刻。「明天」「下週二」以它為基準，而不是現在——
+     *                   平常兩者差幾秒沒影響，但重跑舊資料或佇列積壓時會整個錯開。
      * @return 抽取出來的項目；完全抽不出東西時回傳空清單
      */
-    public List<NoteItem> extract(String transcript) {
+    public List<NoteItem> extract(String transcript, Instant recordedAt) {
 
         // 直接給日曆，而不是要模型自己算。實測光給「今天是星期五」還不夠——
         // 它得再推算「8/17 是星期幾」，而那一步會錯。
-        String system = SYSTEM.formatted(calendar(LocalDate.now(clock.withZone(zone))));
+        String system = SYSTEM.formatted(calendar(LocalDate.ofInstant(recordedAt, zone)));
         String errorFeedback = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {

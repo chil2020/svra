@@ -41,7 +41,12 @@ RESULT_ROUTING_KEY = os.getenv("RESULT_ROUTING_KEY", "transcribe.result")
 
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/data/audio")
 
-MODEL_NAME = os.getenv("WHISPER_MODEL", "small")
+# 聯發科的台灣調校版（Whisper large-v2 為底，已轉成 CTranslate2）。
+# 實測同一段音檔對照 small 與 large-v3：
+#   奮起湖  small ✖ 正啟湖  ／ large-v3 ✔ ／ Breeze ✔
+#   KKday   small ✖ KKM    ／ large-v3 ✖ 認不出 ／ Breeze ✔
+# 第二列是關鍵——中英夾雜是 large-v3 也修不好、只有台灣調校版能處理的。
+MODEL_NAME = os.getenv("WHISPER_MODEL", "phate334/Breeze-ASR-25-ct2")
 DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
@@ -100,7 +105,13 @@ def handle_job(ch, method, properties, body):
         segments, info = get_model().transcribe(
             audio_path,
             beam_size=5,
-            language=job.get("language_hint"),
+            # 沒指定就當華語。自動偵測要多跑一段音訊，而這個服務的輸入
+            # 幾乎都是中文——猜錯的代價比省下的那點時間大。
+            language=job.get("language_hint") or "zh",
+            # 沒開 VAD：實測同一段（有背景音的）錄音，開了反而丟字——
+            # 「奮起湖」在 VAD 開的時候消失。這段是連續獨白、幾乎沒有靜默，
+            # VAD 沒東西可切，只在語音邊界削掉內容。
+            # 之後若出現大量靜默或幻覺迴圈的錄音，再回頭量一次。
         )
         text = "".join(seg.text for seg in segments).strip()
         result = {

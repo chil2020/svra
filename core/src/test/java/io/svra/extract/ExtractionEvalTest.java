@@ -3,7 +3,6 @@ package io.svra.extract;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -18,10 +17,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -41,45 +36,9 @@ import io.svra.note.NoteItem;
  */
 @Tag("eval")
 @SpringBootTest
-@Import(ExtractionEvalTest.FixedClockConfig.class)
 class ExtractionEvalTest {
 
-    /**
-     * 每題把時鐘撥到案例指定的 {@code today}。
-     * 不這樣做的話「明天」「下週二」的預期答案每天都會腐爛，
-     * 這組 eval 就不是回歸測試而是日曆。
-     */
-    static final MutableClock CLOCK = new MutableClock();
-
-    @TestConfiguration
-    static class FixedClockConfig {
-        /**
-         * 名稱刻意不叫 clock：跟 ClockConfig 同名會撞成
-         * BeanDefinitionOverrideException（Boot 預設不允許覆寫）。
-         * 用不同名稱加 @Primary，讓注入時選這個。
-         */
-        @Bean
-        @Primary
-        Clock evalClock() {
-            return CLOCK;
-        }
-    }
-
-    /** 可撥動的時鐘。只在測試用。 */
-    static class MutableClock extends Clock {
-        private Instant instant = Instant.now();
-        private final ZoneId zone = ZoneId.of("Asia/Taipei");
-
-        void setDate(LocalDate date) {
-            this.instant = date.atStartOfDay(zone).toInstant();
-        }
-
-        @Override public ZoneId getZone() { return zone; }
-        @Override public Clock withZone(ZoneId z) { return this; }
-        @Override public Instant instant() { return instant; }
-    }
-
-    private static final Path CASES = Path.of("..", "eval", "cases.jsonl");
+        private static final Path CASES = Path.of("..", "eval", "cases.jsonl");
     private static final ZoneId ZONE = ZoneId.of("Asia/Taipei");
     private static final DateTimeFormatter LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
 
@@ -107,11 +66,14 @@ class ExtractionEvalTest {
 
         for (JsonNode c : cases) {
             String id = c.get("id").asString();
-            CLOCK.setDate(LocalDate.parse(c.get("today").asString()));
             long started = System.currentTimeMillis();
             List<NoteItem> actual;
             try {
-                actual = extractor.extract(c.get("input").asString());
+                // 案例的 today 就是「錄音當下」，直接傳進去——
+                // 不需要動時鐘，因為基準日已經是參數而不是環境。
+                actual = extractor.extract(c.get("input").asString(),
+                        LocalDate.parse(c.get("today").asString())
+                                .atStartOfDay(ZONE).toInstant());
             } catch (Exception e) {
                 System.out.printf("%-12s ✖ 例外：%s%n", id, e.getMessage());
                 board.record(id, List.of("抽取拋出例外"));
