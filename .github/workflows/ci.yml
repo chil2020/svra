@@ -24,6 +24,9 @@ jobs:
             | tar -xz gitleaks
           sudo install -m 755 gitleaks /usr/local/bin/gitleaks
           gitleaks version
+      # detect 掃的是「版控歷史」，這才是會外洩出去的東西。
+      # 掃工作目錄（--no-git）會連 .gitignore 的檔案一起掃，
+      # 本機的 .env 會被誤報 —— 兩種掃法測的是不同的事。
       - name: Scan for hardcoded secrets
         run: gitleaks detect --config .gitleaks.toml --redact --no-banner --verbose
 
