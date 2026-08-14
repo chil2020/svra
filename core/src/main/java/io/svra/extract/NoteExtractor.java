@@ -27,7 +27,7 @@ class NoteExtractor {
     private static final Logger log = LoggerFactory.getLogger(NoteExtractor.class);
 
     /** 改 prompt 就要改這個，才比較得出「是模型的差異還是 prompt 的差異」。 */
-    public static final String PROMPT_VERSION = "v5";
+    public static final String PROMPT_VERSION = "v6";
 
     private static final int MAX_ATTEMPTS = 2;
 
@@ -40,7 +40,8 @@ class NoteExtractor {
             規則：
             - 一段話可能包含多件事，各自成為一個 item
             - category：TODO 待辦事項｜SCHEDULE 有明確時間的行程｜IDEA 想法或靈感
-            - title 一句話講完，30 字以內
+            - title 一句話講完，30 字以內。不要在 title 裡寫日期或星期——
+        時間放 occursAt 就好，顯示時會另外排版，寫兩次只是重複
             - occursAt 用 ISO-8601（例如 2026-08-15T09:00:00+08:00）。
               只講到日期沒講時間就用當天 09:00。完全沒提到時間就填 null。
         下面有日曆表不代表每一筆都要有時間——想法（IDEA）多半沒有時間，
