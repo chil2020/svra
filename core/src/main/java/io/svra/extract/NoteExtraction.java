@@ -1,0 +1,75 @@
+package io.svra.extract;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
+
+/** 一次抽取＝某個模型跑一次的結果。換模型重跑會新增一筆，舊的保留供比較。 */
+@Entity
+@Table(name = "note_extractions")
+public class NoteExtraction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "note_id", nullable = false, updatable = false)
+    private Long noteId;
+
+    @Column(nullable = false, length = 64)
+    private String model;
+
+    @Column(name = "prompt_version", nullable = false, length = 32)
+    private String promptVersion;
+
+    @Column(name = "is_active", nullable = false)
+    private boolean active;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @OneToMany(mappedBy = "extraction", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<NoteItem> items = new ArrayList<>();
+
+    protected NoteExtraction() {
+    }
+
+    private NoteExtraction(Long noteId, String model, String promptVersion) {
+        this.noteId = noteId;
+        this.model = model;
+        this.promptVersion = promptVersion;
+        this.active = true;
+        this.createdAt = Instant.now();
+    }
+
+    public static NoteExtraction of(Long noteId, String model, String promptVersion) {
+        return new NoteExtraction(noteId, model, promptVersion);
+    }
+
+    public void addItem(NoteItem item) {
+        items.add(item);
+        item.attachTo(this);
+    }
+
+    /** 舊版本停用。DB 有部分唯一索引擋著，同一則 note 不會有兩個生效版本。 */
+    public void deactivate() {
+        this.active = false;
+    }
+
+    public Long getId() { return id; }
+    public Long getNoteId() { return noteId; }
+    public String getModel() { return model; }
+    public String getPromptVersion() { return promptVersion; }
+    public boolean isActive() { return active; }
+    public Instant getCreatedAt() { return createdAt; }
+    public List<NoteItem> getItems() { return items; }
+}
