@@ -9,7 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.Spy;
 import org.springframework.dao.DataIntegrityViolationException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;

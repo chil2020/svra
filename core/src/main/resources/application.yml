@@ -43,12 +43,17 @@ svra:
     result-queue: transcribe.results
     result-routing-key: transcribe.result
 
-# Spring AI。換供應商（例如地端 Ollama）時只需換 starter 與這一段設定，
+# Spring AI。地端 Ollama——換供應商只要換 starter 與這一段，
 # ChatClient 的呼叫端不用改。
 spring.ai:
-  anthropic:
-    api-key: ${ANTHROPIC_API_KEY:}
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    init:
+      pull-model-strategy: never   # 模型由 `ollama pull` 管，不讓應用程式自己抓
     chat:
+      # Qwen3.5 是思考模型，預設會思考——這個任務只要結構化輸出，
+      # 思考讓一次抽取從 12 秒變成 200 秒以上，而且 content 有時是空的。
+      think: FALSE
       options:
-        model: claude-sonnet-4-5
+        model: ${OLLAMA_MODEL:qwen3.5:9b}
         temperature: 0.0   # 抽取任務要可重現，不要創意

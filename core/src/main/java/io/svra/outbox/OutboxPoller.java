@@ -10,12 +10,13 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import io.svra.SvraProperties;
 import io.svra.line.LineContentClient;
 import io.svra.mq.MqProperties;
 import io.svra.mq.TranscribeJob;
+import io.svra.extract.NoteExtractionService;
 import io.svra.note.NoteService;
 import io.svra.note.NoteService.TranscribeRequested;
 
@@ -35,6 +36,7 @@ public class OutboxPoller {
 
     private final OutboxEventRepository outboxRepository;
     private final NoteService noteService;
+    private final NoteExtractionService extractionService;
     private final LineContentClient lineContentClient;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
@@ -43,6 +45,7 @@ public class OutboxPoller {
 
     public OutboxPoller(OutboxEventRepository outboxRepository,
             NoteService noteService,
+            NoteExtractionService extractionService,
             LineContentClient lineContentClient,
             RabbitTemplate rabbitTemplate,
             ObjectMapper objectMapper,
@@ -50,6 +53,7 @@ public class OutboxPoller {
             SvraProperties svra) {
         this.outboxRepository = outboxRepository;
         this.noteService = noteService;
+        this.extractionService = extractionService;
         this.lineContentClient = lineContentClient;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
@@ -68,28 +72,38 @@ public class OutboxPoller {
         for (OutboxEvent event : batch) {
             try {
                 TranscribeRequested req = objectMapper.readValue(event.getPayload(), TranscribeRequested.class);
-                String messageId = req.sourceMessageId();
 
-                Path target = Path.of(svra.audioDir(), messageId + ".m4a");
-                lineContentClient.download(messageId, target);
-
-                rabbitTemplate.convertAndSend(
-                        mq.exchange(),
-                        mq.jobRoutingKey(),
-                        new TranscribeJob(messageId, target.getFileName().toString(), null));
+                switch (event.getEventType()) {
+                    case NoteService.EVENT_TRANSCRIBE_REQUESTED -> dispatchTranscribe(req);
+                    case NoteService.EVENT_EXTRACT_REQUESTED -> extractionService.extractFor(req.sourceMessageId());
+                    default -> throw new IllegalStateException("未知的事件型別：" + event.getEventType());
+                }
 
                 event.markSent();
             } catch (Exception e) {
-                log.warn("outbox 發送失敗：id={} attempts={}", event.getId(), event.getAttempts(), e);
+                log.warn("outbox 發送失敗：id={} type={} attempts={}",
+                        event.getId(), event.getEventType(), event.getAttempts(), e);
                 event.markFailed(e.toString());
 
                 // 重試耗盡就不會再有人處理這則訊息了，note 不能留在 PENDING
-                if (event.getStatus() == OutboxStatus.FAILED) {
+                if (event.getStatus() == OutboxStatus.FAILED
+                        && NoteService.EVENT_TRANSCRIBE_REQUESTED.equals(event.getEventType())) {
                     noteService.markTranscriptionFailed(event.getAggregateId());
                 }
                 // 不 throw —— 這一批的其他筆要能繼續
             }
         }
 
+    }
+
+    private void dispatchTranscribe(TranscribeRequested req) throws Exception {
+        String messageId = req.sourceMessageId();
+        Path target = Path.of(svra.audioDir(), messageId + ".m4a");
+        lineContentClient.download(messageId, target);
+
+        rabbitTemplate.convertAndSend(
+                mq.exchange(),
+                mq.jobRoutingKey(),
+                new TranscribeJob(messageId, target.getFileName().toString(), null));
     }
 }

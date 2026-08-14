@@ -14,7 +14,8 @@ import org.springframework.stereotype.Component;
 /**
  * 把逐字稿抽成結構化項目。
  *
- * <p>🔴 承重點④。
+ * <p>
+ * 🔴 承重點④。
  */
 @Component
 public class NoteExtractor {
@@ -58,33 +59,27 @@ public class NoteExtractor {
     public List<NoteItem> extract(String transcript) {
 
         String system = SYSTEM.formatted(LocalDate.now(zone));
+        String errorFeedback = null;
 
-        // ────────────────────────────────────────────────────────────────
-        // 🔴 TODO 你寫：帶錯誤訊息的重試迴圈（Instructor 的做法）
-        //
-        // 骨架：
-        //   for (attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        //       呼叫 chatClient，拿到 ExtractedNote
-        //       用 validate() 檢查
-        //       通過 → 轉成 NoteItem 回傳
-        //       不通過 → 把「錯誤訊息」加進下一輪的 prompt，再試一次
-        //   }
-        //   兩次都失敗 → log 並回傳空清單（不要拋例外中斷整條流程）
-        //
-        // 呼叫方式：
-        //   ExtractedNote r = chatClient.prompt()
-        //           .system(system)
-        //           .user(transcript + 若有錯誤訊息就附上)
-        //           .call()
-        //           .entity(ExtractedNote.class);
-        //
-        // 想清楚：
-        //   Q1 為什麼「把驗證錯誤塞回去」比單純重試有效？
-        //   Q2 兩次都失敗時，為什麼回空清單而不是拋例外？
-        //      （提示：這個方法是誰呼叫的？失敗會影響什麼？）
-        // ────────────────────────────────────────────────────────────────
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            ExtractedNote result = chatClient.prompt()
+                    .system(system)
+                    .user(errorFeedback == null ? transcript
+                            : transcript + "\n\n上次的輸出有問題：\n" + errorFeedback)
+                    .call()
+                    .entity(ExtractedNote.class);
 
-        throw new UnsupportedOperationException("U9 尚未實作");
+            List<String> errors = validate(result);
+            if (errors.isEmpty()) {
+                return result.items().stream().map(NoteExtractor::toEntity).toList();
+            }
+            errorFeedback = String.join("\n", errors);
+            log.warn("抽取驗證失敗（第 {} 次）：{}", attempt, errorFeedback);
+        }
+
+        log.error("抽取連續 {} 次驗證失敗，放棄", MAX_ATTEMPTS);
+        return List.of();
+
     }
 
     /**

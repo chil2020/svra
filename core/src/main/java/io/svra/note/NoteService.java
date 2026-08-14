@@ -6,8 +6,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;
@@ -19,6 +19,7 @@ public class NoteService {
     private static final Logger log = LoggerFactory.getLogger(NoteService.class);
 
     public static final String EVENT_TRANSCRIBE_REQUESTED = "TRANSCRIBE_REQUESTED";
+    public static final String EVENT_EXTRACT_REQUESTED = "EXTRACT_REQUESTED";
 
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;
@@ -65,7 +66,7 @@ public class NoteService {
         try {
             return objectMapper.writeValueAsString(
                     new TranscribeRequested(lineUserId, sourceMessageId));
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("序列化 outbox payload 失敗", e);
         }
     }
@@ -89,6 +90,12 @@ public class NoteService {
                     // 讓使用者看到的內容莫名其妙變動不划算。
                     if (note.getStatus() != NoteStatus.COMPLETED) {
                         note.complete(result.text(), result.language(), result.audioDurationSec());
+                        // 抽取要呼叫 LLM，好幾秒。放這裡會拖長交易也卡住 listener——
+                        // 跟「下載音檔不放在 webhook」同一個判斷，交給 outbox 非同步做。
+                        outboxRepository.save(OutboxEvent.pending(
+                                result.jobId(),
+                                EVENT_EXTRACT_REQUESTED,
+                                toPayload(note.getLineUserId(), result.jobId())));
                     }
                 },
                 // 不能丟例外——listener 拋出去會讓訊息 requeue 成無限迴圈。
