@@ -47,7 +47,7 @@ public class NoteNotifier {
         this.pushClient = pushClient;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public void notifyFor(String sourceMessageId) {
         Note note = noteRepository.findBySourceMessageId(sourceMessageId).orElse(null);
         if (note == null) {
@@ -62,7 +62,10 @@ public class NoteNotifier {
             return;
         }
 
-        pushClient.pushText(note.getLineUserId(), render(extraction.getItems()));
+        String messageId = pushClient.pushText(note.getLineUserId(), render(extraction.getItems()));
+        // 記下來，使用者引用這則訊息下指令時才對應得回這批項目。
+        // 交易在推播成功後才提交——推播失敗就整筆回滾，由 outbox 重試。
+        extraction.recordNotified(messageId);
     }
 
     static String render(List<NoteItem> items) {
@@ -70,6 +73,7 @@ public class NoteNotifier {
                 .collect(Collectors.groupingBy(NoteItem::getCategory));
 
         StringBuilder sb = new StringBuilder("📝 已整理好你的語音筆記\n");
+        int index = 0;
         for (NoteCategory category : ORDER) {
             List<NoteItem> group = byCategory.get(category);
             if (group == null || group.isEmpty()) {
@@ -77,12 +81,13 @@ public class NoteNotifier {
             }
             sb.append('\n').append(HEADINGS.get(category)).append('\n');
             for (NoteItem item : group) {
-                sb.append("・").append(item.getTitle()).append('\n');
+                // 編號讓使用者能說「第二筆」。跨分類連續編，不是各分類重新數。
+                sb.append(++index).append(". ").append(item.getTitle()).append('\n');
                 if (item.getOccursAt() != null) {
-                    sb.append("　　").append(WHEN.format(item.getOccursAt().atZone(ZONE))).append('\n');
+                    sb.append("　　 ").append(WHEN.format(item.getOccursAt().atZone(ZONE))).append('\n');
                 }
             }
         }
-        return sb.toString().stripTrailing();
+        return sb.append("\n引用這則訊息即可修改或刪除").toString();
     }
 }

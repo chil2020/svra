@@ -17,6 +17,7 @@ import io.svra.line.LineContentClient;
 import io.svra.mq.MqProperties;
 import io.svra.mq.TranscribeJob;
 import io.svra.extract.NoteExtractionService;
+import io.svra.extract.NoteCommandService;
 import io.svra.extract.NoteNotifier;
 import io.svra.note.NoteService;
 import io.svra.note.NoteService.NoteEventPayload;
@@ -39,6 +40,7 @@ public class OutboxPoller {
     private final NoteService noteService;
     private final NoteExtractionService extractionService;
     private final NoteNotifier noteNotifier;
+    private final NoteCommandService commandService;
     private final LineContentClient lineContentClient;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
@@ -49,6 +51,7 @@ public class OutboxPoller {
             NoteService noteService,
             NoteExtractionService extractionService,
             NoteNotifier noteNotifier,
+            NoteCommandService commandService,
             LineContentClient lineContentClient,
             RabbitTemplate rabbitTemplate,
             ObjectMapper objectMapper,
@@ -58,6 +61,7 @@ public class OutboxPoller {
         this.noteService = noteService;
         this.extractionService = extractionService;
         this.noteNotifier = noteNotifier;
+        this.commandService = commandService;
         this.lineContentClient = lineContentClient;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
@@ -75,12 +79,13 @@ public class OutboxPoller {
 
         for (OutboxEvent event : batch) {
             try {
-                NoteEventPayload req = objectMapper.readValue(event.getPayload(), NoteEventPayload.class);
-
+                // payload 的形狀依事件型別而異，所以在各分支裡各自反序列化。
                 switch (event.getEventType()) {
-                    case NoteService.EVENT_TRANSCRIBE_REQUESTED -> dispatchTranscribe(req);
-                    case NoteService.EVENT_EXTRACT_REQUESTED -> extractionService.extractFor(req.sourceMessageId());
-                    case NoteService.EVENT_NOTIFY_REQUESTED -> noteNotifier.notifyFor(req.sourceMessageId());
+                    case NoteService.EVENT_TRANSCRIBE_REQUESTED -> dispatchTranscribe(notePayload(event));
+                    case NoteService.EVENT_EXTRACT_REQUESTED -> extractionService.extractFor(notePayload(event).sourceMessageId());
+                    case NoteService.EVENT_NOTIFY_REQUESTED -> noteNotifier.notifyFor(notePayload(event).sourceMessageId());
+                    case NoteService.EVENT_COMMAND_REQUESTED -> commandService.applyCommand(
+                            objectMapper.readValue(event.getPayload(), NoteCommandService.CommandPayload.class));
                     default -> throw new IllegalStateException("未知的事件型別：" + event.getEventType());
                 }
 
@@ -110,5 +115,9 @@ public class OutboxPoller {
                 mq.exchange(),
                 mq.jobRoutingKey(),
                 new TranscribeJob(messageId, target.getFileName().toString(), null));
+    }
+
+    private NoteEventPayload notePayload(OutboxEvent event) {
+        return objectMapper.readValue(event.getPayload(), NoteEventPayload.class);
     }
 }

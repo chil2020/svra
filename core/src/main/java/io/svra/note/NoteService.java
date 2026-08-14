@@ -21,6 +21,7 @@ public class NoteService {
     public static final String EVENT_TRANSCRIBE_REQUESTED = "TRANSCRIBE_REQUESTED";
     public static final String EVENT_EXTRACT_REQUESTED = "EXTRACT_REQUESTED";
     public static final String EVENT_NOTIFY_REQUESTED = "NOTIFY_REQUESTED";
+    public static final String EVENT_COMMAND_REQUESTED = "COMMAND_REQUESTED";
 
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;

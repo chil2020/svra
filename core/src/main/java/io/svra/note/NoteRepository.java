@@ -13,5 +13,8 @@ public interface NoteRepository extends JpaRepository<Note, Long> {
      */
     Optional<Note> findBySourceMessageId(String sourceMessageId);
 
+    /** 使用者沒引用特定推播時，指令套用在最近一則筆記上。 */
+    Optional<Note> findTopByLineUserIdOrderByIdDesc(String lineUserId);
+
     List<Note> findByLineUserIdOrderByCreatedAtDesc(String lineUserId);
 }

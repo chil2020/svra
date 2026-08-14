@@ -59,6 +59,14 @@ public class NoteItem {
         this.tags = tags;
     }
 
+    public void rename(String newTitle) {
+        this.title = newTitle;
+    }
+
+    public void reschedule(Instant newOccursAt) {
+        this.occursAt = newOccursAt;
+    }
+
     void attachTo(NoteExtraction extraction) {
         this.extraction = extraction;
     }

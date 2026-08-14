@@ -16,6 +16,13 @@ public record LineWebhookPayload(List<Event> events) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Event(String type, Source source, Message message) {
 
+        /** 文字訊息＝使用者在下指令（刪除、修改行程等）。 */
+        public boolean isTextMessage() {
+            return "message".equals(type)
+                    && message != null
+                    && "text".equals(message.type());
+        }
+
         public boolean isAudioMessage() {
             return "message".equals(type)
                     && message != null
@@ -28,6 +35,6 @@ public record LineWebhookPayload(List<Event> events) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Message(String id, String type) {
+    public record Message(String id, String type, String text, String quotedMessageId) {
     }
 }

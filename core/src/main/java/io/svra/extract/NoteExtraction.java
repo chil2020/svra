@@ -37,6 +37,10 @@ public class NoteExtraction {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /** 推播出去的 LINE 訊息 ID，用來對應使用者的引用回覆。 */
+    @Column(name = "notify_message_id", length = 64)
+    private String notifyMessageId;
+
     @OneToMany(mappedBy = "extraction", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<NoteItem> items = new ArrayList<>();
 
@@ -61,6 +65,15 @@ public class NoteExtraction {
     }
 
     /** 舊版本停用。DB 有部分唯一索引擋著，同一則 note 不會有兩個生效版本。 */
+    /** orphanRemoval = true，從集合移除就等於刪除該列。 */
+    public void removeItem(NoteItem item) {
+        items.remove(item);
+    }
+
+    public void recordNotified(String lineMessageId) {
+        this.notifyMessageId = lineMessageId;
+    }
+
     public void deactivate() {
         this.active = false;
     }
@@ -72,4 +85,5 @@ public class NoteExtraction {
     public boolean isActive() { return active; }
     public Instant getCreatedAt() { return createdAt; }
     public List<NoteItem> getItems() { return items; }
+    public String getNotifyMessageId() { return notifyMessageId; }
 }

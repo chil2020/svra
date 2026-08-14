@@ -9,6 +9,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 /**
  * 主動推訊息給使用者。
  *
@@ -32,12 +34,21 @@ public class LinePushClient {
                 .build();
     }
 
-    public void pushText(String lineUserId, String text) {
+    /** push 的回應。只取得到訊息 ID 就夠，quoteToken 目前沒用到。 */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record PushResponse(List<SentMessage> sentMessages) {
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        record SentMessage(String id, String quoteToken) {
+        }
+    }
+
+    /** @return LINE 回傳的訊息 ID，供之後比對使用者的引用回覆；拿不到時回傳 null。 */
+    public String pushText(String lineUserId, String text) {
         String body = text.length() > MAX_TEXT_LENGTH
                 ? text.substring(0, MAX_TEXT_LENGTH - 1) + "…"
                 : text;
 
-        restClient.post()
+        return restClient.post()
                 .uri(PUSH_URL)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
@@ -49,8 +60,13 @@ public class LinePushClient {
                         throw new IllegalStateException(
                                 "LINE push 回應 " + response.getStatusCode() + "，userId=" + lineUserId);
                     }
-                    log.info("已推送訊息：userId={} 長度={}", lineUserId, body.length());
-                    return null;
+                    PushResponse parsed = response.bodyTo(PushResponse.class);
+                    String messageId = (parsed == null || parsed.sentMessages() == null
+                            || parsed.sentMessages().isEmpty())
+                                    ? null
+                                    : parsed.sentMessages().get(0).id();
+                    log.info("已推送訊息：userId={} 長度={} messageId={}", lineUserId, body.length(), messageId);
+                    return messageId;
                 });
     }
 }

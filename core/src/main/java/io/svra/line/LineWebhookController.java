@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import tools.jackson.databind.ObjectMapper;
 
+import io.svra.extract.NoteCommandService;
 import io.svra.note.NoteService;
 
 /**
@@ -37,13 +38,16 @@ public class LineWebhookController {
     private final LineProperties lineProperties;
     private final ObjectMapper objectMapper;
     private final NoteService noteService;
+    private final NoteCommandService commandService;
 
     public LineWebhookController(LineProperties lineProperties,
             ObjectMapper objectMapper,
-            NoteService noteService) {
+            NoteService noteService,
+            NoteCommandService commandService) {
         this.lineProperties = lineProperties;
         this.objectMapper = objectMapper;
         this.noteService = noteService;
+        this.commandService = commandService;
     }
 
     /**
@@ -70,10 +74,16 @@ public class LineWebhookController {
         }
 
         for (LineWebhookPayload.Event event : events) {
-            if (!event.isAudioMessage()) {
-                continue;
+            if (event.isAudioMessage()) {
+                noteService.recordIncoming(event.source().userId(), event.message().id());
+            } else if (event.isTextMessage()) {
+                // 指令處理不能拖慢 webhook——一樣走 outbox，這裡只記下意圖。
+                commandService.recordCommand(
+                        event.source().userId(),
+                        event.message().id(),
+                        event.message().text(),
+                        event.message().quotedMessageId());
             }
-            noteService.recordIncoming(event.source().userId(), event.message().id());
         }
 
         return ResponseEntity.ok().build();

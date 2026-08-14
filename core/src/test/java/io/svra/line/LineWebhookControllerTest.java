@@ -10,6 +10,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import io.svra.extract.NoteCommandService;
 import io.svra.note.NoteService;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -40,6 +41,9 @@ class LineWebhookControllerTest {
     /** @WebMvcTest 只載入 Web 層，@Service 不在其中，要自己補。 */
     @MockitoBean
     private NoteService noteService;
+
+    @MockitoBean
+    private NoteCommandService commandService;
 
     @Test
     @DisplayName("簽章正確 → 200（webhook 要秒回，重活交給佇列）")
