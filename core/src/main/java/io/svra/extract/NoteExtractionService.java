@@ -10,6 +10,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import io.svra.note.Note;
 import io.svra.note.NoteRepository;
+import io.svra.note.NoteService;
+import io.svra.outbox.OutboxEvent;
+import io.svra.outbox.OutboxEventRepository;
 
 @Service
 public class NoteExtractionService {
@@ -19,15 +22,21 @@ public class NoteExtractionService {
     private final NoteRepository noteRepository;
     private final NoteExtractionRepository extractionRepository;
     private final NoteExtractor extractor;
+    private final OutboxEventRepository outboxRepository;
+    private final NoteService noteService;
     private final String model;
 
     public NoteExtractionService(NoteRepository noteRepository,
             NoteExtractionRepository extractionRepository,
             NoteExtractor extractor,
+            OutboxEventRepository outboxRepository,
+            NoteService noteService,
             @Value("${spring.ai.ollama.chat.options.model:unknown}") String model) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
         this.extractor = extractor;
+        this.outboxRepository = outboxRepository;
+        this.noteService = noteService;
         this.model = model;
     }
 
@@ -62,6 +71,13 @@ public class NoteExtractionService {
         NoteExtraction extraction = NoteExtraction.of(note.getId(), model, NoteExtractor.PROMPT_VERSION);
         items.forEach(extraction::addItem);
         extractionRepository.save(extraction);
+
+        // 推播是使用者唯一看得到的結果，掉了整條流程等於白做——
+        // 所以跟抽取結果同交易寫下意圖，由 outbox 負責送達與重試。
+        outboxRepository.save(OutboxEvent.pending(
+                sourceMessageId,
+                NoteService.EVENT_NOTIFY_REQUESTED,
+                noteService.toPayload(note.getLineUserId(), sourceMessageId)));
 
         log.info("抽取完成：messageId={} model={} items={}", sourceMessageId, model, items.size());
     }

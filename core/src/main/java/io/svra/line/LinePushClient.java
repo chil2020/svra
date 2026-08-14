@@ -1,0 +1,56 @@
+package io.svra.line;
+
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+
+/**
+ * 主動推訊息給使用者。
+ *
+ * <p>用 push 而不是 reply：reply token 只有 30 秒有效期，而轉錄加抽取要跑更久，
+ * 拿到結果時 token 早就過期了。代價是 push 有月額度而 reply 沒有。
+ */
+@Component
+public class LinePushClient {
+
+    private static final Logger log = LoggerFactory.getLogger(LinePushClient.class);
+    private static final String PUSH_URL = "https://api.line.me/v2/bot/message/push";
+
+    /** 單則訊息上限 5000 字，超過整個請求會被拒絕。 */
+    private static final int MAX_TEXT_LENGTH = 5000;
+
+    private final RestClient restClient;
+
+    public LinePushClient(RestClient.Builder builder, LineProperties lineProperties) {
+        this.restClient = builder
+                .defaultHeader("Authorization", "Bearer " + lineProperties.channelAccessToken())
+                .build();
+    }
+
+    public void pushText(String lineUserId, String text) {
+        String body = text.length() > MAX_TEXT_LENGTH
+                ? text.substring(0, MAX_TEXT_LENGTH - 1) + "…"
+                : text;
+
+        restClient.post()
+                .uri(PUSH_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of(
+                        "to", lineUserId,
+                        "messages", List.of(Map.of("type", "text", "text", body))))
+                .exchange((request, response) -> {
+                    // exchange() 不會因為 4xx/5xx 拋例外，狀態碼要自己檢查。
+                    if (!response.getStatusCode().is2xxSuccessful()) {
+                        throw new IllegalStateException(
+                                "LINE push 回應 " + response.getStatusCode() + "，userId=" + lineUserId);
+                    }
+                    log.info("已推送訊息：userId={} 長度={}", lineUserId, body.length());
+                    return null;
+                });
+    }
+}

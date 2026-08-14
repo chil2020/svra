@@ -14,7 +14,11 @@ export AUDIO_DIR="$(pwd)/data/audio"
 mkdir -p "$AUDIO_DIR"
 
 echo "AUDIO_DIR = $AUDIO_DIR"
-echo "LINE_CHANNEL_SECRET = ${LINE_CHANNEL_SECRET:+已設定}${LINE_CHANNEL_SECRET:-⚠️ 未設定}"
+# 只印有沒有設定，不印值。
+# 注意 ${V:+已設定}${V:-未設定} 這種寫法是錯的：有值時第二段會展開成「值本身」，
+# 等於把 secret 印進日誌。先收斂成一個變數再取預設值才安全。
+SECRET_STATE="${LINE_CHANNEL_SECRET:+已設定}"
+echo "LINE_CHANNEL_SECRET = ${SECRET_STATE:-⚠️ 未設定}"
 echo ""
 
 exec mvn -B -ntp spring-boot:run -f core/pom.xml

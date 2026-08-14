@@ -17,8 +17,9 @@ import io.svra.line.LineContentClient;
 import io.svra.mq.MqProperties;
 import io.svra.mq.TranscribeJob;
 import io.svra.extract.NoteExtractionService;
+import io.svra.extract.NoteNotifier;
 import io.svra.note.NoteService;
-import io.svra.note.NoteService.TranscribeRequested;
+import io.svra.note.NoteService.NoteEventPayload;
 
 /**
  * 把 outbox 裡的待送事件真的送出去。
@@ -37,6 +38,7 @@ public class OutboxPoller {
     private final OutboxEventRepository outboxRepository;
     private final NoteService noteService;
     private final NoteExtractionService extractionService;
+    private final NoteNotifier noteNotifier;
     private final LineContentClient lineContentClient;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
@@ -46,6 +48,7 @@ public class OutboxPoller {
     public OutboxPoller(OutboxEventRepository outboxRepository,
             NoteService noteService,
             NoteExtractionService extractionService,
+            NoteNotifier noteNotifier,
             LineContentClient lineContentClient,
             RabbitTemplate rabbitTemplate,
             ObjectMapper objectMapper,
@@ -54,6 +57,7 @@ public class OutboxPoller {
         this.outboxRepository = outboxRepository;
         this.noteService = noteService;
         this.extractionService = extractionService;
+        this.noteNotifier = noteNotifier;
         this.lineContentClient = lineContentClient;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
@@ -71,11 +75,12 @@ public class OutboxPoller {
 
         for (OutboxEvent event : batch) {
             try {
-                TranscribeRequested req = objectMapper.readValue(event.getPayload(), TranscribeRequested.class);
+                NoteEventPayload req = objectMapper.readValue(event.getPayload(), NoteEventPayload.class);
 
                 switch (event.getEventType()) {
                     case NoteService.EVENT_TRANSCRIBE_REQUESTED -> dispatchTranscribe(req);
                     case NoteService.EVENT_EXTRACT_REQUESTED -> extractionService.extractFor(req.sourceMessageId());
+                    case NoteService.EVENT_NOTIFY_REQUESTED -> noteNotifier.notifyFor(req.sourceMessageId());
                     default -> throw new IllegalStateException("未知的事件型別：" + event.getEventType());
                 }
 
@@ -96,7 +101,7 @@ public class OutboxPoller {
 
     }
 
-    private void dispatchTranscribe(TranscribeRequested req) throws Exception {
+    private void dispatchTranscribe(NoteEventPayload req) throws Exception {
         String messageId = req.sourceMessageId();
         Path target = Path.of(svra.audioDir(), messageId + ".m4a");
         lineContentClient.download(messageId, target);

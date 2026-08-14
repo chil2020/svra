@@ -20,6 +20,7 @@ public class NoteService {
 
     public static final String EVENT_TRANSCRIBE_REQUESTED = "TRANSCRIBE_REQUESTED";
     public static final String EVENT_EXTRACT_REQUESTED = "EXTRACT_REQUESTED";
+    public static final String EVENT_NOTIFY_REQUESTED = "NOTIFY_REQUESTED";
 
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;
@@ -62,17 +63,17 @@ public class NoteService {
         }
     }
 
-    private String toPayload(String lineUserId, String sourceMessageId) {
+    public String toPayload(String lineUserId, String sourceMessageId) {
         try {
             return objectMapper.writeValueAsString(
-                    new TranscribeRequested(lineUserId, sourceMessageId));
+                    new NoteEventPayload(lineUserId, sourceMessageId));
         } catch (JacksonException e) {
             throw new IllegalStateException("序列化 outbox payload 失敗", e);
         }
     }
 
-    /** 存進 outbox 的事件內容。 */
-    public record TranscribeRequested(String lineUserId, String sourceMessageId) {
+    /** 三種事件共用的 payload：轉錄、抽取、推播都只需要這兩個欄位。 */
+    public record NoteEventPayload(String lineUserId, String sourceMessageId) {
     }
 
     /**
