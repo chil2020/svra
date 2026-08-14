@@ -82,10 +82,12 @@ public class NoteNotifier {
             sb.append('\n').append(HEADINGS.get(category)).append('\n');
             for (NoteItem item : group) {
                 // 編號讓使用者能說「第二筆」。跨分類連續編，不是各分類重新數。
-                sb.append(++index).append(". ").append(item.getTitle()).append('\n');
+                sb.append(++index).append(". ");
+                // 時間放標題前面：掃視一串行程時，先找的是時間不是標題。
                 if (item.getOccursAt() != null) {
-                    sb.append("　　 ").append(WHEN.format(item.getOccursAt().atZone(ZONE))).append('\n');
+                    sb.append(WHEN.format(item.getOccursAt().atZone(ZONE))).append('\n').append("　 ");
                 }
+                sb.append(item.getTitle()).append('\n');
             }
         }
         return sb.append("\n引用這則訊息即可修改或刪除").toString();

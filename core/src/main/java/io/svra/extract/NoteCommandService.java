@@ -83,7 +83,8 @@ public class NoteCommandService {
         List<NoteItem> items = extraction.getItems();
         NoteCommand command = parser.parse(payload.text(), items);
 
-        String reply = switch (command.action()) {
+        String reply;
+        reply = switch (command.action()) {
             case DELETE -> {
                 NoteItem target = items.get(command.itemIndex() - 1);
                 extraction.removeItem(target);
@@ -102,6 +103,11 @@ public class NoteCommandService {
             }
             case UNKNOWN -> "🤔 " + (command.reason() == null ? "看不懂這個指令。" : command.reason());
         };
+
+        // 只做了一半就要說——不然使用者會以為兩件事都交代了。
+        if (command.unhandled() != null && !command.unhandled().isBlank()) {
+            reply += "\n\n⚠️ 這部分我還不會處理：" + command.unhandled();
+        }
 
         pushClient.pushText(payload.lineUserId(), reply);
         log.info("指令已處理：action={} messageId={}", command.action(), payload.commandMessageId());

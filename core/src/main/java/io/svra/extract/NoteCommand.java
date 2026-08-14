@@ -8,13 +8,16 @@ package io.svra.extract;
  * @param newTitle   UPDATE_TITLE 用
  * @param newOccursAt UPDATE_TIME 用，ISO-8601
  * @param reason     UNKNOWN 時說明為什麼看不懂，會回給使用者
+ * @param unhandled  這次沒能處理的部分；使用者一次講多件事時，把做不到的那些說出來。
+ *                   沉默地只做一半比看不懂更糟——使用者會以為都交代了。
  */
 public record NoteCommand(
         Action action,
         Integer itemIndex,
         String newTitle,
         String newOccursAt,
-        String reason) {
+        String reason,
+        String unhandled) {
 
     public enum Action {
         /** 刪除某一筆 */

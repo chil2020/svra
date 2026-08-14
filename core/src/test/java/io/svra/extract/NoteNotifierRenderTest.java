@@ -25,7 +25,7 @@ class NoteNotifierRenderTest {
                 item(NoteCategory.SCHEDULE, "行程C", "2026-08-15T01:00:00Z")));
 
         // 排序後是 行程C(1) → 待辦B(2) → 想法A(3)
-        assertThat(out).contains("1. 行程C").contains("2. 待辦B").contains("3. 想法A");
+        assertThat(out).contains("1. 8/15(週六) 09:00").contains("2. 待辦B").contains("3. 想法A");
     }
 
     @Test
@@ -48,7 +48,9 @@ class NoteNotifierRenderTest {
                 item(NoteCategory.SCHEDULE, "前往阿里山", "2026-08-15T01:00:00Z")));
 
         // 01:00 UTC = 09:00 台北；E 在 zh-TW 是「週六」不是「六」
-        assertThat(out).contains("8/15(週六) 09:00");
+        // 時間在標題前面
+        assertThat(out).contains("1. 8/15(週六) 09:00");
+        assertThat(out.indexOf("8/15")).isLessThan(out.indexOf("前往阿里山"));
     }
 
     @Test

@@ -31,10 +31,13 @@
 | ✅ | Transactional Outbox：音檔下載與 `transcribe.job` 發佈，含指數退避與 DLQ |
 | ✅ | 轉錄結果消費、冪等去重 |
 | ✅ | LLM 結構化抽取：Spring AI ＋ 地端 Ollama，含領域驗證與帶錯誤重試 |
+| ✅ | 結果推播回 LINE |
+| ✅ | 文字指令：刪除／改標題／改時間，用引用回覆定位 |
 | 📋 | RAG 與向量檢索（見 [Future Work](#future-work)） |
 
 端到端已用真實 LINE 語音驗證：webhook → 驗簽 → note+outbox 同交易 →
-poller 下載音檔 → RabbitMQ → whisper → 結果回寫 → LLM 抽取 → `note_items`。
+poller 下載音檔 → RabbitMQ → whisper → 結果回寫 → LLM 抽取 → 推播回 LINE。
+使用者可以引用推播訊息、用一句話修改或刪除其中的項目。
 **全程在本機執行，不呼叫任何付費 API。**
 
 範圍凍結日：2026-08-18。凍結後的項目一律進 [Future Work](#future-work)，
@@ -55,7 +58,8 @@ flowchart LR
     CORE <-->|結構化抽取| LLM[Ollama<br/>qwen3.5:9b 地端]
     CORE <--> PG[(PostgreSQL)]
     CORE <--> RD[(Redis<br/>快取 / 限流)]
-    CORE -->|回覆| LINE
+    CORE -->|push 推播結果| LINE
+    LINE -->|文字指令（可引用）| CORE
 ```
 
 | 組件 | 技術 | 職責 |
@@ -171,7 +175,7 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 
 ### 7. Package by feature，不是 by layer
 
-**決策**：`io.svra.{line, transcription, note, assistant, llm}`，
+**決策**：`io.svra.{line, note, outbox, mq, extract}`，
 而不是 `{controller, service, repository, entity}`。
 
 **為什麼**：這是事件驅動系統，邊界天生清楚。按功能切的話，
@@ -183,6 +187,36 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 > 注意：controller／service／repository 三層並沒有消失，只是住在各自的
 > feature 資料夾裡。計畫加上 Spring Modulith 的 `ApplicationModules.verify()`
 > 自動驗證邊界（見 Future Work）。
+
+#### 已知債務：`extract/` 現在裝了三個功能
+
+加推播與指令功能時，我把它們放進了 `extract/`——因為實體已經在那裡：
+
+```
+extract/
+  NoteExtraction, NoteItem, NoteCategory, NoteExtractionRepository  ← 領域實體
+  NoteExtractor, ExtractedNote, NoteExtractionService               ← 功能：抽取
+  NoteNotifier                                                     ← 功能：推播
+  NoteCommand, NoteCommandParser, NoteCommandService               ← 功能：指令
+```
+
+**這是 by-layer 的慣性**：按「技術上相依什麼」放，而不是按「這是什麼功能」放。
+一個違反自己決策的例子，留在這裡比刪掉誠實。
+
+正確的切法應該是把實體歸還給領域，三個功能各自成 package：
+
+```
+note/     Note, NoteExtraction, NoteItem, NoteCategory 與其 repository
+extract/  NoteExtractor, ExtractedNote, NoteExtractionService
+notify/   NoteNotifier
+command/  NoteCommand, NoteCommandParser, NoteCommandService
+```
+
+這樣 package-private 擋的是「功能之間不要互相呼叫」，而不是「不要碰實體」——
+**實體屬於領域，不屬於任何一個使用它的功能。**
+
+還沒動的原因：純搬移沒有行為變化，而範圍凍結日將至。
+真正要做時得連 `ApplicationModules.verify()` 一起上，否則邊界只是資料夾而非約束。
 
 ### 8. Schema 由 Flyway 單一管理，JPA 只驗證
 
@@ -242,7 +276,37 @@ NoteExtractor.java           0 行   ← 呼叫端沒動
 實測就遇到一次——`detail` 寫「8月16日」但 `occursAt` 填成 08-15，
 兩者不一致而驗證抓不到。要抓需要跨欄位的一致性檢查，那是下一層的事。
 
-### 11. Redis 只做快取與限流
+### 11. 指代解析靠 LINE 的引用，不靠對話狀態
+
+**決策**：使用者引用某則推播訊息下指令時，用 webhook 帶的 `quotedMessageId`
+反查是哪一批項目；沒引用就退回「這位使用者最近一次的抽取」。
+
+**為什麼**：「把第二筆改成 8/16」的「第二筆」是相對於某則訊息的。
+常見做法是在伺服器記住「這個使用者上次看到什麼」，但那是**對話狀態**——
+多裝置、訊息亂序、使用者隔天才回覆，全都會讓它失準。
+
+LINE 的引用功能把這個狀態**放在訊息本身**：使用者指哪則，webhook 就告訴你哪則。
+伺服器不需要記憶，也不會過期。
+
+**放棄了什麼**：要多存一欄（`note_extractions.notify_message_id`），
+而且使用者不引用時仍需一個退路——目前是取最近一次，那條路徑會有指錯的風險。
+
+**什麼情況會反悔**：如果之後支援跨多則筆記的操作（「把這週的行程都刪掉」），
+單一引用就不夠了，得引入真正的工作階段概念。
+
+### 12. 只做一半要說出來
+
+**決策**：`NoteCommand` 有一個 `unhandled` 欄位，讓 LLM 回報「這次沒能處理的部分」，
+回覆時附在後面。
+
+**為什麼**：實測時使用者一句話講了兩件事——「時間應該放在最前面，然後第二筆是 8/16」。
+系統只做得到改時間，於是**默默做了一半，回覆也只提改時間**。
+
+這比「看不懂」更糟：看不懂使用者知道要換句話說，做一半使用者以為都交代了。
+
+**放棄了什麼**：多信任 LLM 一個欄位——它可能漏報，或把做到的事誤報成沒做到。
+
+### 13. Redis 只做快取與限流
 
 **決策**：Redis 用於「同輸入快取」與 per-user rate limit，**不作為資料真相來源**。
 
@@ -283,7 +347,7 @@ OLLAMA_MODEL=llama3.1:8b ./run-core.sh
 │       ├── note/         # 領域核心：Note entity、冪等寫入、結果回寫
 │       ├── outbox/       # Transactional Outbox：事件表、poller、退避重試
 │       ├── mq/           # RabbitMQ topology、job/result 契約、結果 listener
-│       └── extract/      # LLM 抽取：prompt、領域驗證、版本化結果
+│       └── extract/      # LLM 抽取、推播、文字指令（見決策 7 的已知債務）
 ├── whisper-worker/   # Python 轉錄 worker（含煙霧測試）
 ├── eval/             # LLM 抽取的 eval 集（見 Future Work）
 ├── deploy/           # postgres init、K8s manifests

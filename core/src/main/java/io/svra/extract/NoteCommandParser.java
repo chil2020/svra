@@ -42,6 +42,10 @@ public class NoteCommandParser {
       - newOccursAt 用 ISO-8601（例如 2026-08-16T09:00:00+08:00）。
         只講日期沒講時間就沿用原本那筆的時間；原本沒有時間就用 09:00
       - action 是 UNKNOWN 時，reason 要用一句話說明，會直接回給使用者
+      - 使用者可能一次講好幾件事，而你只做得到其中一件。把做不到的那些
+        寫進 unhandled（用使用者的話複述），沒有就留空。
+        例如「時間放前面，然後第二筆改成8/16」→ 做改時間，
+        unhandled 填「時間放前面」
 
       今天是 %s。
       """;
@@ -72,14 +76,14 @@ public class NoteCommandParser {
       if (result.action() != NoteCommand.Action.UNKNOWN
           && (result.itemIndex() == null || result.itemIndex() < 1 || result.itemIndex() > items.size())) {
         return new NoteCommand(NoteCommand.Action.UNKNOWN, null, null, null,
-            "找不到你說的那一筆，可以說編號嗎？");
+            "找不到你說的那一筆，可以說編號嗎？", null);
       }
       return result;
 
     } catch (Exception e) {
       log.warn("指令解析失敗：{}", userText, e);
       return new NoteCommand(NoteCommand.Action.UNKNOWN, null, null, null,
-          "看不懂這個指令，可以換個說法嗎？");
+          "看不懂這個指令，可以換個說法嗎？", null);
     }
   }
 
