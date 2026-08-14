@@ -175,48 +175,37 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 
 ### 7. Package by feature，不是 by layer
 
-**決策**：`io.svra.{line, note, outbox, mq, extract}`，
+**決策**：`io.svra.{line, note, outbox, mq, extract, notify, command}`，
 而不是 `{controller, service, repository, entity}`。
 
 **為什麼**：這是事件驅動系統，邊界天生清楚。按功能切的話，
 **一個變更只動一個資料夾**，而且可以用 package-private 真正擋住跨模組呼叫——
 按層切的話所有東西都必須 public，沒有任何機制防止亂呼叫。
 
+**實體歸領域，不歸功能**：`note/` 放 `Note`、`NoteExtraction`、`NoteItem`
+與其 repository；`extract`／`notify`／`command` 是三個各自獨立的功能，
+都消費同一個領域模型。這樣 package-private 擋的是「功能之間不要互相呼叫」，
+而不是「不要碰實體」。
+
+實際效果是每個功能 package 對外只露出一個入口：
+
+| package | 對外可見 | 收在裡面 |
+|---|---|---|
+| `extract/` | `NoteExtractionService` | `NoteExtractor`、`ExtractedNote` |
+| `notify/` | `NoteNotifier` | — |
+| `command/` | `NoteCommandService` | `NoteCommandParser`、`NoteCommand` |
+
 **放棄了什麼**：不如分層直覺（多數教學文都是分層），新人上手需要適應。
+
+> 這則決策踩過一次：加推播與指令功能時，我把它們放進了 `extract/`——
+> 因為實體已經在那裡。那是 by-layer 的慣性：按「技術上相依什麼」放，
+> 而不是按「這是什麼功能」放。發現後才搬成現在的樣子，順手把只在單一
+> package 內使用的類別收成 package-private——**那個收斂就是這則決策的實際回報**，
+> 不搬的話拿不到。
 
 > 注意：controller／service／repository 三層並沒有消失，只是住在各自的
 > feature 資料夾裡。計畫加上 Spring Modulith 的 `ApplicationModules.verify()`
-> 自動驗證邊界（見 Future Work）。
-
-#### 已知債務：`extract/` 現在裝了三個功能
-
-加推播與指令功能時，我把它們放進了 `extract/`——因為實體已經在那裡：
-
-```
-extract/
-  NoteExtraction, NoteItem, NoteCategory, NoteExtractionRepository  ← 領域實體
-  NoteExtractor, ExtractedNote, NoteExtractionService               ← 功能：抽取
-  NoteNotifier                                                     ← 功能：推播
-  NoteCommand, NoteCommandParser, NoteCommandService               ← 功能：指令
-```
-
-**這是 by-layer 的慣性**：按「技術上相依什麼」放，而不是按「這是什麼功能」放。
-一個違反自己決策的例子，留在這裡比刪掉誠實。
-
-正確的切法應該是把實體歸還給領域，三個功能各自成 package：
-
-```
-note/     Note, NoteExtraction, NoteItem, NoteCategory 與其 repository
-extract/  NoteExtractor, ExtractedNote, NoteExtractionService
-notify/   NoteNotifier
-command/  NoteCommand, NoteCommandParser, NoteCommandService
-```
-
-這樣 package-private 擋的是「功能之間不要互相呼叫」，而不是「不要碰實體」——
-**實體屬於領域，不屬於任何一個使用它的功能。**
-
-還沒動的原因：純搬移沒有行為變化，而範圍凍結日將至。
-真正要做時得連 `ApplicationModules.verify()` 一起上，否則邊界只是資料夾而非約束。
+> 讓邊界從慣例變成測試期的約束（見 Future Work）。
 
 ### 8. Schema 由 Flyway 單一管理，JPA 只驗證
 
@@ -344,10 +333,12 @@ OLLAMA_MODEL=llama3.1:8b ./run-core.sh
 ├── core/             # Spring Boot 核心（開發清單見 core/TODO.md）
 │   └── src/main/java/io/svra/
 │       ├── line/         # LINE adapter：webhook 驗簽、音檔下載
-│       ├── note/         # 領域核心：Note entity、冪等寫入、結果回寫
+│       ├── note/         # 領域核心：Note / NoteExtraction / NoteItem 與其 repository
 │       ├── outbox/       # Transactional Outbox：事件表、poller、退避重試
 │       ├── mq/           # RabbitMQ topology、job/result 契約、結果 listener
-│       └── extract/      # LLM 抽取、推播、文字指令（見決策 7 的已知債務）
+│       ├── extract/      # LLM 抽取：prompt、領域驗證、版本化結果
+│       ├── notify/       # 把抽取結果排版後推回 LINE
+│       └── command/      # 文字指令：意圖解析、套用、回報
 ├── whisper-worker/   # Python 轉錄 worker（含煙霧測試）
 ├── eval/             # LLM 抽取的 eval 集（見 Future Work）
 ├── deploy/           # postgres init、K8s manifests

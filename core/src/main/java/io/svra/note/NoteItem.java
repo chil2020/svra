@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.note;
 
 import java.time.Instant;
 import java.util.List;

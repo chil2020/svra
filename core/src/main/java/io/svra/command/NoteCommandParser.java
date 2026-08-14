@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.command;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
+import io.svra.note.NoteItem;
 
 /**
  * 把使用者的一句話解析成指令。
@@ -18,7 +19,7 @@ import org.springframework.stereotype.Component;
  * 🔴 承重點⑤。
  */
 @Component
-public class NoteCommandParser {
+class NoteCommandParser {
 
   private static final Logger log = LoggerFactory.getLogger(NoteCommandParser.class);
 

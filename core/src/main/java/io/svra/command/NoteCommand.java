@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.command;
 
 /**
  * LLM 解析出來的指令。
@@ -11,7 +11,7 @@ package io.svra.extract;
  * @param unhandled  這次沒能處理的部分；使用者一次講多件事時，把做不到的那些說出來。
  *                   沉默地只做一半比看不懂更糟——使用者會以為都交代了。
  */
-public record NoteCommand(
+record NoteCommand(
         Action action,
         Integer itemIndex,
         String newTitle,

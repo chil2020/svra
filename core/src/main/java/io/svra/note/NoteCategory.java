@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.note;
 
 public enum NoteCategory {
     TODO,

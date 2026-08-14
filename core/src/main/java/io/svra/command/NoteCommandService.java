@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.command;
 
 import java.util.List;
 
@@ -16,6 +16,9 @@ import io.svra.note.NoteRepository;
 import io.svra.note.NoteService;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
+import io.svra.note.NoteItem;
+import io.svra.note.NoteExtractionRepository;
+import io.svra.note.NoteExtraction;
 
 /** 處理使用者用文字下的指令（刪除、改標題、改時間）。 */
 @Service

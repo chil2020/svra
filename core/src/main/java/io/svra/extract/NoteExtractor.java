@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
+import io.svra.note.NoteItem;
+import io.svra.note.NoteCategory;
 
 /**
  * 把逐字稿抽成結構化項目。
@@ -18,7 +20,7 @@ import org.springframework.stereotype.Component;
  * 🔴 承重點④。
  */
 @Component
-public class NoteExtractor {
+class NoteExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(NoteExtractor.class);
 

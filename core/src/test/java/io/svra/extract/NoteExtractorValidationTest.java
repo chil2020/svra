@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.svra.note.NoteCategory;
 
 /**
  * 只測領域驗證，不呼叫 LLM。

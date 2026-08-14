@@ -17,8 +17,8 @@ import io.svra.line.LineContentClient;
 import io.svra.mq.MqProperties;
 import io.svra.mq.TranscribeJob;
 import io.svra.extract.NoteExtractionService;
-import io.svra.extract.NoteCommandService;
-import io.svra.extract.NoteNotifier;
+import io.svra.command.NoteCommandService;
+import io.svra.notify.NoteNotifier;
 import io.svra.note.NoteService;
 import io.svra.note.NoteService.NoteEventPayload;
 

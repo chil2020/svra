@@ -1,6 +1,7 @@
 package io.svra.extract;
 
 import java.util.List;
+import io.svra.note.NoteCategory;
 
 /**
  * LLM 的抽取結果。Spring AI 會從這個 record 產生 JSON Schema 塞進 prompt，
@@ -8,7 +9,7 @@ import java.util.List;
  *
  * @param items 一段語音可能同時包含待辦、想法與行程，所以是多筆
  */
-public record ExtractedNote(List<Item> items) {
+record ExtractedNote(List<Item> items) {
 
     /**
      * @param category  TODO 待辦｜IDEA 想法｜SCHEDULE 行程

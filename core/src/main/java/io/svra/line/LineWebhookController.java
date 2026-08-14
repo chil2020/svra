@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import tools.jackson.databind.ObjectMapper;
 
-import io.svra.extract.NoteCommandService;
+import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
 
 /**

@@ -13,6 +13,9 @@ import io.svra.note.NoteRepository;
 import io.svra.note.NoteService;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
+import io.svra.note.NoteItem;
+import io.svra.note.NoteExtractionRepository;
+import io.svra.note.NoteExtraction;
 
 @Service
 public class NoteExtractionService {

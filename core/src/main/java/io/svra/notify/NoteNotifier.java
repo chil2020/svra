@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.notify;
 
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -15,6 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import io.svra.line.LinePushClient;
 import io.svra.note.Note;
 import io.svra.note.NoteRepository;
+import io.svra.note.NoteItem;
+import io.svra.note.NoteExtractionRepository;
+import io.svra.note.NoteExtraction;
+import io.svra.note.NoteCategory;
 
 /** 把抽取結果排版後推回 LINE。 */
 @Service

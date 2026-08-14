@@ -1,4 +1,4 @@
-package io.svra.extract;
+package io.svra.note;
 
 import java.util.List;
 import java.util.Optional;
