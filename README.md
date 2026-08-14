@@ -26,11 +26,16 @@
 |------|------|
 | ✅ | LINE webhook 接收：HMAC-SHA256 驗簽、秒回 200 |
 | ✅ | `notes` schema（Flyway）＋ JPA entity／repository，含冪等唯一鍵 |
-| ✅ | Python whisper worker（faster-whisper，端到端 smoke test 通過） |
+| ✅ | Python whisper worker（faster-whisper） |
 | ✅ | docker-compose：PostgreSQL(pgvector) / RabbitMQ / Redis / worker |
-| 🚧 | 音檔下載與 `transcribe.job` 發佈 |
-| 🚧 | 轉錄結果消費、冪等去重 |
-| 📋 | LLM 結構化抽取（Spring AI / LangChain4j） |
+| ✅ | Transactional Outbox：音檔下載與 `transcribe.job` 發佈，含指數退避與 DLQ |
+| ✅ | 轉錄結果消費、冪等去重 |
+| ✅ | LLM 結構化抽取：Spring AI ＋ 地端 Ollama，含領域驗證與帶錯誤重試 |
+| 📋 | RAG 與向量檢索（見 [Future Work](#future-work)） |
+
+端到端已用真實 LINE 語音驗證：webhook → 驗簽 → note+outbox 同交易 →
+poller 下載音檔 → RabbitMQ → whisper → 結果回寫 → LLM 抽取 → `note_items`。
+**全程在本機執行，不呼叫任何付費 API。**
 
 範圍凍結日：2026-08-18。凍結後的項目一律進 [Future Work](#future-work)，
 但**每一項都會寫清楚「評估過、決定不做、理由是什麼」**——因為說得出取捨，
@@ -47,7 +52,7 @@ flowchart LR
     MQ --> W[whisper-worker<br/>Python / faster-whisper]
     W -->|transcribe.result| MQ
     MQ --> CORE
-    CORE <-->|結構化抽取| LLM[Claude API]
+    CORE <-->|結構化抽取| LLM[Ollama<br/>qwen3.5:9b 地端]
     CORE <--> PG[(PostgreSQL)]
     CORE <--> RD[(Redis<br/>快取 / 限流)]
     CORE -->|回覆| LINE
@@ -55,10 +60,11 @@ flowchart LR
 
 | 組件 | 技術 | 職責 |
 |------|------|------|
-| core | Java 21 / Spring Boot 3.5 | Webhook 接收與驗簽、佇列編排、LLM 層 |
+| core | Java 21 / Spring Boot 4.1 | Webhook 接收與驗簽、Outbox 編排、LLM 抽取 |
 | whisper-worker | Python / faster-whisper | 語音轉文字（無狀態，可水平擴展） |
 | 佇列 | RabbitMQ | 任務分派、DLQ 補償 |
-| 儲存 | PostgreSQL | 筆記本體（pgvector 已備妥，RAG 見 Future Work） |
+| 儲存 | PostgreSQL | 筆記本體、outbox 事件、抽取結果（pgvector 已備妥） |
+| LLM | Spring AI ＋ Ollama | 結構化抽取，地端執行 |
 | 快取/限流 | Redis | LLM 成本控制 |
 
 ---
@@ -98,7 +104,31 @@ flowchart LR
 **什麼情況會反悔**：如果冪等鍵不是單一欄位、或需要在寫 DB 前就擋掉
 （例如避免昂貴的前置運算），會改用 Redis `SETNX` 當前置閘門，**但 DB 約束仍然保留當最後防線**。
 
-### 3. RabbitMQ 而非 Kafka
+### 3. Transactional Outbox：先寫意圖，再送訊息
+
+**決策**：`recordIncoming()` 在**同一個交易**裡寫 `notes` 與 `outbox_events`
+兩張表，訊息由背景 poller 讀 outbox 後才真的發到 RabbitMQ。
+
+**為什麼**：「寫資料庫」和「發訊息」是兩個系統，沒有共同的交易。
+先發訊息再寫 DB，DB 失敗就發出了不存在的任務；先寫 DB 再發訊息，
+發送失敗任務就永遠不會執行——而 note 停在 PENDING，**沒有人知道它被放棄了**。
+
+Outbox 把「要發訊息」變成一筆資料，跟業務資料同進同退。
+交易提交就代表意圖已持久化，RabbitMQ 掛掉只會延遲，不會遺失。
+
+**放棄了什麼**：**Outbox 不消除兩系統提交問題，它把「可能遺失」換成「可能重複」**——
+poller 送出訊息後、標記 SENT 前掛掉，重啟會再送一次。
+代價是下游必須冪等（at-least-once），這也是為什麼 `applyTranscription()` 要擋重複結果。
+
+還有輪詢延遲（本專案 2 秒）與一張要維運的表。
+
+**多實例怎麼辦**：`SELECT ... FOR UPDATE SKIP LOCKED`——
+多個 poller 各自鎖住不同批次，不會重複處理同一筆。
+
+**什麼情況會反悔**：如果訊息遺失可以接受（例如可重算的衍生資料），
+直接發訊息簡單得多。Outbox 的成本只有在「這筆任務不能掉」時才值得。
+
+### 4. RabbitMQ 而非 Kafka
 
 **決策**：用 RabbitMQ。
 
@@ -110,7 +140,7 @@ flowchart LR
 **什麼情況會反悔**：當「同一份轉錄結果需要被多個下游各自消費」
 （例如同時要進搜尋索引、進資料倉儲、觸發通知），或需要回溯重放歷史事件時，Kafka 才划算。
 
-### 4. Java 編排 ＋ Python ML worker
+### 5. Java 編排 ＋ Python ML worker
 
 **決策**：核心編排用 Java/Spring Boot，語音轉錄留在 Python。
 
@@ -123,7 +153,7 @@ flowchart LR
 **什麼情況會反悔**：如果轉錄改成呼叫外部 API（不自己跑模型），
 Python worker 就沒有存在必要，整併回 Java 更簡單。
 
-### 5. 簽章驗證放在 Controller，不放 Filter
+### 6. 簽章驗證放在 Controller，不放 Filter
 
 **決策**：HMAC 驗簽寫在 `LineWebhookController`，沒有抽到 Filter／Interceptor。
 
@@ -139,7 +169,7 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 > （先反序列化再序列化回來會因空白／欄位順序差異導致簽章對不上）；
 > 比對用 `MessageDigest.isEqual()` 而非 `equals()`——固定時間比較，避免 timing attack。
 
-### 6. Package by feature，不是 by layer
+### 7. Package by feature，不是 by layer
 
 **決策**：`io.svra.{line, transcription, note, assistant, llm}`，
 而不是 `{controller, service, repository, entity}`。
@@ -154,7 +184,7 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 > feature 資料夾裡。計畫加上 Spring Modulith 的 `ApplicationModules.verify()`
 > 自動驗證邊界（見 Future Work）。
 
-### 7. Schema 由 Flyway 單一管理，JPA 只驗證
+### 8. Schema 由 Flyway 單一管理，JPA 只驗證
 
 **決策**：`spring.jpa.hibernate.ddl-auto=validate`，所有 schema 變更走 Flyway migration。
 
@@ -165,17 +195,54 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 
 > 正式環境絕不用 `ddl-auto=update`：它會加欄位但不會刪、順序不可預測、無法 code review、無法回滾。
 
-### 8. LLM 層用 Spring AI / LangChain4j，不自己手刻 client
+### 9. LLM 層用 Spring AI，模型跑在地端
 
-**決策**（2026-07 修正）：原本規劃用 `RestClient` 手寫薄 client 直呼 Claude API，
-改為使用 Spring AI 或 LangChain4j。
+**決策**：用 Spring AI 當抽象層，模型是本機 Ollama 上的 qwen3.5:9b。
 
-**為什麼**：框架的 `VectorStore` 抽象正好對應 pgvector、`FunctionCallback`
-正好對應 tool use，與既定架構天然吻合；而且它已是 Java 生態處理 LLM 的共通詞彙。
+**為什麼**：抽象層的價值不在「看起來比較乾淨」，在於**換供應商的成本**。
+實際換過一次（Anthropic API → 地端 Ollama）動到的東西：
 
-**放棄了什麼**：對重試、快取、token 計量的控制權要透過框架的擴充點，不如手寫直接。
+```
+core/pom.xml                 starter 一行
+application.yml              一段設定
+NoteExtractor.java           0 行   ← 呼叫端沒動
+測試                          0 行
+```
 
-### 9. Redis 只做快取與限流
+跑地端還有兩個附帶好處：**成本歸零**，以及**語音筆記不離開自己的機器**。
+
+**放棄了什麼**：地端 9B 模型的推理不如雲端旗艦。實測同一段逐字稿，
+專有名詞的轉錄錯誤（「奮起湖」被 Whisper 轉成「正啟湖」）它照原樣保留——
+符合 prompt 裡「判斷不出來就照原樣」的規則，但更強的模型能從上下文修正。
+
+**什麼情況會反悔**：抽取準確率成為瓶頸時就換模型。`note_extractions`
+表的存在就是為了這個——換模型不覆蓋舊結果，兩版並存後再決定用哪個。
+
+> 踩到的坑：qwen3.5 是**思考模型**，預設會思考，一次抽取從 12 秒變成 200 秒以上，
+> 而且回應的 `content` 有時是空的。關閉思考需要 `spring.ai.ollama.chat.think`，
+> 這個設定鍵到 Spring AI 2.0 才綁得上（1.1.8 雖有 `think-option`，
+> 但缺 Boolean → ThinkOption 的轉換器），而 Spring AI 2.0 需要 Spring Boot 4。
+
+### 10. 結構化輸出之外，還要領域驗證
+
+**決策**：LLM 回傳的結果先過 `validate()`，不通過就把**錯誤訊息帶回去**重試一次。
+
+**為什麼**：**結構化輸出解決格式，不解決正確性。**
+模型可以回傳完全合法的 JSON，卻把 2026 年的行程推斷成 2019 年。
+所以除了 schema，還要檢查內容合不合理：日期在合理範圍、
+分類為 SCHEDULE 就必須有時間、title 不可空白。
+
+重試時把驗證錯誤塞回 prompt，而不是單純重送——**模型不知道自己錯了**，
+同樣的輸入只會得到同樣的機率分佈。把「你上次 occursAt 給了 8月16號，
+那不是 ISO-8601」放進去，它才知道要修哪裡。
+
+**放棄了什麼**：多一次 LLM 呼叫的延遲與成本（地端的話只有延遲）。
+
+**這一層擋不住什麼**：內容錯但格式與範圍都合法的情況。
+實測就遇到一次——`detail` 寫「8月16日」但 `occursAt` 填成 08-15，
+兩者不一致而驗證抓不到。要抓需要跨欄位的一致性檢查，那是下一層的事。
+
+### 11. Redis 只做快取與限流
 
 **決策**：Redis 用於「同輸入快取」與 per-user rate limit，**不作為資料真相來源**。
 
@@ -190,14 +257,21 @@ Controller 的 `@RequestBody` 就拿到空的，得用 `ContentCachingRequestWra
 cp .env.example .env      # 填入 LINE 憑證（憑證一律走環境變數，不進版控）
 docker compose up -d      # postgres + rabbitmq + redis + whisper-worker
 
-# 管線煙霧測試（首次會下載 Whisper 模型，建議先設 WHISPER_MODEL=tiny）
-docker compose run --rm whisper-worker python scripts/smoke_test.py
+# 地端 LLM（抽取層用，不需要任何付費 API）
+brew install ollama && brew services start ollama
+ollama pull qwen3.5:9b    # 約 6.6 GB，建議 16 GB 以上記憶體
 
-# core 在本機跑（預設值已指向 compose 的服務）
-cd core && mvn spring-boot:run
+# core 在本機跑（預設值已指向 compose 與 localhost:11434）
+./run-core.sh
 
 # 測試
 cd core && mvn test
+```
+
+要換模型只需覆寫環境變數，不用改程式：
+
+```bash
+OLLAMA_MODEL=llama3.1:8b ./run-core.sh
 ```
 
 ## 專案結構
@@ -205,17 +279,18 @@ cd core && mvn test
 ```
 ├── core/             # Spring Boot 核心（開發清單見 core/TODO.md）
 │   └── src/main/java/io/svra/
-│       ├── line/         # LINE adapter：webhook 驗簽、messaging client
-│       ├── transcription/# 轉錄編排：發 job、收 result、冪等
-│       ├── note/         # 領域核心：Note entity / repository
-│       ├── assistant/    # 分類抽取、問答編排
-│       └── llm/          # LLM client：tool use、快取、限流
+│       ├── line/         # LINE adapter：webhook 驗簽、音檔下載
+│       ├── note/         # 領域核心：Note entity、冪等寫入、結果回寫
+│       ├── outbox/       # Transactional Outbox：事件表、poller、退避重試
+│       ├── mq/           # RabbitMQ topology、job/result 契約、結果 listener
+│       └── extract/      # LLM 抽取：prompt、領域驗證、版本化結果
 ├── whisper-worker/   # Python 轉錄 worker（含煙霧測試）
 ├── eval/             # LLM 抽取的 eval 集（見 Future Work）
 ├── deploy/           # postgres init、K8s manifests
 ├── legacy/           # 重構前的原始腳本（憑證已改為環境變數）
 └── docker-compose.yml
 ```
+
 
 ---
 
@@ -242,6 +317,10 @@ schema 已預留，但相似度檢索尚未實作。
 
 這是「串 API」與「工程化 LLM」的分水嶺——沒有 eval，改 prompt 就是在賭。
 優先度最高的一項 Future Work。
+
+已經有一個具體的題目：實測時模型把某筆行程的 `detail` 寫成「8月16日」、
+`occursAt` 卻填成 08-15。**格式合法、日期也在合理範圍，領域驗證抓不到**——
+這正是需要 eval 才看得見的那類錯誤。
 
 ### 可觀測性
 
