@@ -64,6 +64,15 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!--
+            Boot 4 把 FlywayAutoConfiguration 拆到獨立模組。只放 flyway-core
+            的話自動設定不會載入，migration 靜靜地不執行——是 ddl-auto=validate
+            在啟動時擋下來的（用 update 就會悄悄長歪）。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
