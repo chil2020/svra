@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -34,10 +35,12 @@ public class NoteService {
     /**
      * 記錄一則剛收到的語音訊息，並在<b>同一個交易裡</b>寫下「要送轉錄任務」的意圖。
      *
-     * <p>兩者同進同退是 outbox 的重點：交易提交 = 意圖已持久化，
+     * <p>
+     * 兩者同進同退是 outbox 的重點：交易提交 = 意圖已持久化，
      * 之後 poller 負責真的送出去。RabbitMQ 掛掉只會延遲，不會讓 note 卡在 PENDING。
      *
-     * <p>LINE 的 webhook 是 at-least-once，同一個 sourceMessageId 呼叫幾次都只留一筆。
+     * <p>
+     * LINE 的 webhook 是 at-least-once，同一個 sourceMessageId 呼叫幾次都只留一筆。
      *
      * @return true = 第一次收到；false = 重複投遞
      */
@@ -69,5 +72,45 @@ public class NoteService {
 
     /** 存進 outbox 的事件內容。 */
     public record TranscribeRequested(String lineUserId, String sourceMessageId) {
+    }
+
+    /**
+     * 把轉錄結果寫回對應的 note。
+     *
+     * <p>
+     * 🔴 承重點：必須冪等。outbox 是 at-least-once，同一個結果可能回來兩次。
+     */
+    @Transactional
+    public void applyTranscription(TranscribeResult result) {
+        noteRepository.findBySourceMessageId(result.jobId()).ifPresentOrElse(
+                note -> {
+                    // 已完成就不覆蓋。結果可能重複回來（outbox 是 at-least-once），
+                    // whisper 用 beam search 兩次結果可能有微小差異，
+                    // 讓使用者看到的內容莫名其妙變動不划算。
+                    if (note.getStatus() != NoteStatus.COMPLETED) {
+                        note.complete(result.text(), result.language(), result.audioDurationSec());
+                    }
+                },
+                // 不能丟例外——listener 拋出去會讓訊息 requeue 成無限迴圈。
+                // 也補不出新的 note：結果訊息裡沒有 lineUserId，而該欄位是 NOT NULL。
+                () -> log.error("找不到對應的 note：messageId={}", result.jobId()));
+    }
+
+    /**
+     * outbox 徹底放棄時，讓 note 也有終局——否則它會永遠停在 PENDING，
+     * 使用者傳了語音卻等不到任何結果，也沒有人知道它已經被放棄了。
+     *
+     * <p>
+     * 失敗的原因不存在 note 上：{@code outbox_events.last_error} 已經有了，
+     * 兩邊用 source_message_id 對得起來。
+     */
+    @Transactional
+    public void markTranscriptionFailed(String sourceMessageId) {
+        noteRepository.findBySourceMessageId(sourceMessageId).ifPresentOrElse(
+                note -> {
+                    note.fail();
+                    log.warn("轉錄放棄，note 標記為 FAILED：messageId={}", sourceMessageId);
+                },
+                () -> log.error("要標記失敗但找不到 note：messageId={}", sourceMessageId));
     }
 }

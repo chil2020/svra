@@ -11,12 +11,15 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.svra.mq.TranscribeResult;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static java.util.Optional.empty;
+import static java.util.Optional.of;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -114,5 +117,59 @@ class NoteServiceTest {
         noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
         verify(outboxRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    // ── U7：套用轉錄結果 ──────────────────────────────────────────
+
+    private static TranscribeResult completedResult(String text) {
+        return new TranscribeResult(MESSAGE_ID, "completed", text, "zh", 3.2f, 1.8f, "small");
+    }
+
+    @Test
+    @DisplayName("收到結果 → 補上內容並轉為 COMPLETED")
+    void resultCompletesTheNote() {
+        Note note = Note.pending(USER_ID, MESSAGE_ID);
+        when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(of(note));
+
+        noteService.applyTranscription(completedResult("記得繳電費"));
+
+        assertThat(note.getStatus()).isEqualTo(NoteStatus.COMPLETED);
+        assertThat(note.getTranscript()).isEqualTo("記得繳電費");
+        assertThat(note.getLanguage()).isEqualTo("zh");
+        assertThat(note.getAudioDurationSec()).isEqualTo(3.2f);
+    }
+
+    @Test
+    @DisplayName("已經是 COMPLETED → 不覆蓋，第一個結果為準")
+    void duplicateResultDoesNotOverwrite() {
+        Note note = Note.pending(USER_ID, MESSAGE_ID);
+        note.complete("第一次的結果", "zh", 3.2f);
+        when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(of(note));
+
+        noteService.applyTranscription(completedResult("第二次的結果"));
+
+        assertThat(note.getTranscript()).isEqualTo("第一次的結果");
+    }
+
+    @Test
+    @DisplayName("找不到 note → 不丟例外（丟出去會讓訊息 requeue 成無限迴圈）")
+    void missingNoteDoesNotThrow() {
+        when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(empty());
+
+        assertThatCode(() -> noteService.applyTranscription(completedResult("內容")))
+                .doesNotThrowAnyException();
+    }
+
+    // ── outbox 耗盡重試時的收尾 ────────────────────────────────────
+
+    @Test
+    @DisplayName("outbox 放棄時，note 要標成 FAILED，不能留在 PENDING")
+    void markTranscriptionFailedSetsNoteFailed() {
+        Note note = Note.pending(USER_ID, MESSAGE_ID);
+        when(noteRepository.findBySourceMessageId(MESSAGE_ID)).thenReturn(of(note));
+
+        noteService.markTranscriptionFailed(MESSAGE_ID);
+
+        assertThat(note.getStatus()).isEqualTo(NoteStatus.FAILED);
     }
 }
