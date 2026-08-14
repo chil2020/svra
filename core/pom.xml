@@ -163,8 +163,34 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <argLine>-javaagent:${org.mockito:mockito-core:jar}</argLine>
+                    <!--
+                        eval 會呼叫真的 LLM：慢、不具決定性，結果是準確率不是紅綠燈。
+                        平常跑 mvn test 不該被它拖住，要跑時用 -Peval。
+                        （這裡不能只寫 excludedGroups 再靠 -Dgroups 覆蓋——
+                         pom 裡明寫的設定會壓過命令列屬性，測試會一個都跑不到。）
+                    -->
+                    <excludedGroups>eval</excludedGroups>
                 </configuration>
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- mvn test -Peval：只跑 eval，其餘略過 -->
+        <profile>
+            <id>eval</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups combine.self="override"/>
+                            <groups>eval</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

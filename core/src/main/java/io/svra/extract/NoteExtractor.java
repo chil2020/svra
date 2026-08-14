@@ -1,10 +1,13 @@
 package io.svra.extract;
 
 import java.time.Instant;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.format.TextStyle;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +28,7 @@ class NoteExtractor {
     private static final Logger log = LoggerFactory.getLogger(NoteExtractor.class);
 
     /** 改 prompt 就要改這個，才比較得出「是模型的差異還是 prompt 的差異」。 */
-    public static final String PROMPT_VERSION = "v1";
+    public static final String PROMPT_VERSION = "v3";
 
     private static final int MAX_ATTEMPTS = 2;
 
@@ -44,14 +47,21 @@ class NoteExtractor {
             - 逐字稿裡沒有的資訊不要自己補
             - 明顯是轉錄錯誤的專有名詞，若能從上下文判斷就修正，判斷不出來就照原樣
 
-            今天是 %s。使用者說「明天」「下週二」時以此為基準。
+            日期對照表（用這個，不要自己推算星期）：
+            %s
             """;
 
     private final ChatClient chatClient;
+    private final Clock clock;
     private final ZoneId zone = ZoneId.of("Asia/Taipei");
 
-    public NoteExtractor(ChatClient.Builder builder) {
+    /**
+     * 時鐘用注入的而不是 {@code LocalDate.now()}——「明天」「下週二」要能驗算，
+     * 而寫死的 now() 讓 eval 每天跑出不同結果，相對日期的案例全部會腐爛。
+     */
+    NoteExtractor(ChatClient.Builder builder, Clock clock) {
         this.chatClient = builder.build();
+        this.clock = clock;
     }
 
     /**
@@ -60,7 +70,9 @@ class NoteExtractor {
      */
     public List<NoteItem> extract(String transcript) {
 
-        String system = SYSTEM.formatted(LocalDate.now(zone));
+        // 直接給日曆，而不是要模型自己算。實測光給「今天是星期五」還不夠——
+        // 它得再推算「8/17 是星期幾」，而那一步會錯。
+        String system = SYSTEM.formatted(calendar(LocalDate.now(clock.withZone(zone))));
         String errorFeedback = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -82,6 +94,23 @@ class NoteExtractor {
         log.error("抽取連續 {} 次驗證失敗，放棄", MAX_ATTEMPTS);
         return List.of();
 
+    }
+
+    /** 今天起 14 天的日期與星期，讓模型查表而不是心算。 */
+    private String calendar(LocalDate today) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 14; i++) {
+            LocalDate d = today.plusDays(i);
+            sb.append("            ").append(d)
+                    .append("（").append(d.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.TAIWAN)).append("）");
+            if (i == 0) {
+                sb.append(" ← 今天");
+            } else if (i == 1) {
+                sb.append(" ← 明天");
+            }
+            sb.append('\n');
+        }
+        return sb.toString().strip();
     }
 
     /**

@@ -1,6 +1,7 @@
 package io.svra.command;
 
 import java.time.Instant;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
@@ -52,10 +53,13 @@ class NoteCommandParser {
       """;
 
   private final ChatClient chatClient;
+  private final Clock clock;
   private final ZoneId zone = ZoneId.of("Asia/Taipei");
 
-  public NoteCommandParser(ChatClient.Builder builder) {
+  /** 時鐘用注入的而不是 LocalDate.now()，「下週二」才驗算得了。 */
+  NoteCommandParser(ChatClient.Builder builder, Clock clock) {
     this.chatClient = builder.build();
+    this.clock = clock;
   }
 
   /**
@@ -64,7 +68,7 @@ class NoteCommandParser {
    */
   public NoteCommand parse(String userText, List<NoteItem> items) {
 
-    String system = SYSTEM.formatted(renderItems(items), LocalDate.now(zone));
+    String system = SYSTEM.formatted(renderItems(items), LocalDate.now(clock.withZone(zone)));
 
     try {
       NoteCommand result = chatClient.prompt()
