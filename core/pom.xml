@@ -81,6 +81,36 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+
+            <!--
+                把 mockito-core 的實際路徑解析成 ${org.mockito:mockito-core:jar}，
+                供下方 surefire 的 -javaagent 使用。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+                Mockito 需要 Java agent 才能在執行期改寫類別、產生 mock。
+                沒有明確指定時，它會用 ByteBuddy「動態自我掛載」——現在可以跑，
+                但 JDK 正在收掉這個能力（JEP 451），未來版本會直接失敗。
+                在這裡掛成正式的 -javaagent：警告消失，升級 JDK 也不會突然壞掉。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-javaagent:${org.mockito:mockito-core:jar}</argLine>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>
