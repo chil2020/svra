@@ -61,6 +61,10 @@ services:
 
   core:
     build: ./core
+    # 開發時 core 通常跑在本機（改一行不用重建映像檔），所以放進 profile：
+    #   docker compose up -d                  只起基礎服務
+    #   docker compose --profile full up -d   連 core 一起
+    profiles: ["full"]
     # .env 提供 LINE 憑證與 postgres/rabbitmq 帳密；
     # 下面的 environment 覆蓋掉那些「本機開發用 localhost」的預設值——
     # 在容器裡 localhost 是容器自己，要走 compose 的服務名。

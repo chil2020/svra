@@ -391,7 +391,7 @@ cp .env.example .env      # 填入 LINE 憑證（憑證一律走環境變數，�
 brew install ollama && brew services start ollama
 ollama pull qwen3.5:9b    # 約 6.6 GB，建議 16 GB 以上記憶體
 
-docker compose up -d      # postgres + rabbitmq + redis + whisper-worker + core
+docker compose up -d      # postgres + rabbitmq + redis + whisper-worker
 
 # 對外入口：LINE 要打得到 webhook
 ngrok start svra          # 固定網域，webhook URL 設定一次就不用再改
@@ -404,14 +404,20 @@ ngrok start svra          # 固定網域，webhook URL 設定一次就不用再�
 
 轉錄模型（Breeze-ASR-25）首次啟動時自動下載約 1.5 GB，快取在 docker volume。
 
-### 開發時只跑 core 在本機
-
-改 core 的程式時不必每次重建映像檔：
+core 本身在本機跑（改一行不用重建映像檔）：
 
 ```bash
-docker compose stop core   # 兩邊都綁 8080，先停容器那份
 ./run-core.sh              # 讀 .env 並把 AUDIO_DIR 指到共享目錄
 ```
+
+要整套都在容器裡（部署或驗證用）：
+
+```bash
+docker compose --profile full up -d    # 連 core 一起
+```
+
+⚠️ 兩邊都綁 8080，不要同時開。容器版沒停乾淨的話，本機這支會啟動失敗；
+反過來，本機那支沒關就 `--profile full`，容器的埠會發布不出去而**不報錯**。
 
 `run-core.sh` 存在的理由是 `.env` 只有 compose 在讀，`mvn spring-boot:run` 不會讀；
 而 `audio-dir` 用相對路徑會依啟動目錄而變，兩端就會讀寫不同地方。

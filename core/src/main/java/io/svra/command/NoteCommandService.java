@@ -93,47 +93,72 @@ public class NoteCommandService {
         NoteExtraction quoted = resolveQuoted(payload);
         List<NoteItem> items = quoted != null ? quoted.getOrderedItems() : upcoming(payload.lineUserId());
 
-        if (items.isEmpty()) {
-            pushClient.pushText(payload.lineUserId(), "目前沒有任何項目，先傳一則語音吧。");
+        NoteCommand command = parser.parse(payload.text(), items);
+        if (command.isUnknown()) {
+            pushClient.pushText(payload.lineUserId(), "🤔 " + command.reason());
             return;
         }
-        NoteCommand command = parser.parse(payload.text(), items);
 
-        String reply;
-        reply = switch (command.action()) {
-            case DELETE -> {
-                NoteItem target = items.get(command.itemIndex() - 1);
-                target.getExtraction().removeItem(target);
-                yield "🗑 已刪除：" + target.getTitle();
-            }
-            case UPDATE_TITLE -> {
-                NoteItem target = items.get(command.itemIndex() - 1);
-                String before = target.getTitle();
-                target.rename(command.newTitle());
-                yield "✏️ 已改標題：\n" + before + "\n→ " + command.newTitle();
-            }
-            case UPDATE_TIME -> {
-                NoteItem target = items.get(command.itemIndex() - 1);
-                target.reschedule(NoteCommandParser.parseOccursAt(command.newOccursAt()));
-                yield "🕘 已改時間：" + target.getTitle();
-            }
-            case LIST -> null;   // 清單稍後重繪：這一輪可能還做了修改，要反映修改後的結果
-            case UNKNOWN -> "🤔 " + (command.reason() == null ? "看不懂這個指令。" : command.reason());
-        };
+        // 🔴 先把編號解析成項目，再開始動手。
+        // 邊刪邊用編號取值的話，「刪掉第一筆跟第三筆」會刪錯第二筆——
+        // 刪掉第一筆之後，原本的第三筆已經變成第二筆了。
+        List<NoteItem> targets = command.ops().stream()
+                .map(op -> op.itemIndex() == null ? null : items.get(op.itemIndex() - 1))
+                .toList();
 
-        if (command.action() == NoteCommand.Action.LIST) {
-            // 重新讀一次而不是沿用上面的 items——LIST 也可能跟修改指令一起下，
-            // 要秀的是「改完之後」的樣子。
-            reply = NoteNotifier.render(upcoming(payload.lineUserId()));
+        StringBuilder reply = new StringBuilder();
+        boolean listRequested = false;
+
+        for (int i = 0; i < command.ops().size(); i++) {
+            NoteCommand.Op op = command.ops().get(i);
+            NoteItem target = targets.get(i);
+            switch (op.action()) {
+                case DELETE -> {
+                    target.getExtraction().removeItem(target);
+                    reply.append("🗑 已刪除：").append(target.getTitle()).append('\n');
+                }
+                case UPDATE_TITLE -> {
+                    String before = target.getTitle();
+                    target.rename(op.title());
+                    reply.append("✏️ 已改標題：").append(before)
+                            .append(" → ").append(op.title()).append('\n');
+                }
+                case UPDATE_TIME -> {
+                    target.reschedule(NoteCommandParser.parseOccursAt(op.occursAt()));
+                    reply.append("🕘 已改時間：").append(target.getTitle()).append('\n');
+                }
+                case ADD -> {
+                    NoteExtraction owner = quoted != null ? quoted : latestExtraction(payload.lineUserId());
+                    if (owner == null) {
+                        reply.append("⚠️ 還沒有任何筆記可以加進去，先傳一則語音吧。\n");
+                        break;
+                    }
+                    NoteItem added = new NoteItem(
+                            NoteCommandParser.parseCategory(op.category()), op.title(),
+                            NoteCommandParser.parseOccursAt(op.occursAt()), null, List.of());
+                    owner.addItem(added);
+                    reply.append("➕ 已新增：").append(op.title()).append('\n');
+                }
+                case LIST -> listRequested = true;
+            }
         }
 
-        // 只做了一半就要說——不然使用者會以為兩件事都交代了。
+        if (listRequested) {
+            // 重新查一次而不是沿用上面那份——這一輪可能剛改過東西，
+            // 要秀的是改完之後的樣子。
+            if (!reply.isEmpty()) {
+                reply.append('\n');
+            }
+            reply.append(NoteNotifier.render(upcoming(payload.lineUserId())));
+        }
+
+        // 只做了一半就要說——不然使用者會以為都交代了。
         if (command.unhandled() != null && !command.unhandled().isBlank()) {
-            reply += "\n\n⚠️ 這部分我還不會處理：" + command.unhandled();
+            reply.append("\n⚠️ 這部分我還不會處理：").append(command.unhandled());
         }
 
-        pushClient.pushText(payload.lineUserId(), reply);
-        log.info("指令已處理：action={} messageId={}", command.action(), payload.commandMessageId());
+        pushClient.pushText(payload.lineUserId(), reply.toString().strip());
+        log.info("指令已處理：{} 個動作 messageId={}", command.ops().size(), payload.commandMessageId());
     }
 
     /** 使用者引用了某則推播時，精準定位到那一批；沒引用回 null。 */
@@ -147,6 +172,13 @@ public class NoteCommandService {
             log.debug("引用的訊息找不到對應抽取，改用整體清單：quoted={}", payload.quotedMessageId());
         }
         return quoted;
+    }
+
+    /** 新增的項目要掛在某一批抽取底下——沒指定就掛最近那批。 */
+    private NoteExtraction latestExtraction(String lineUserId) {
+        return noteRepository.findTopByLineUserIdOrderByIdDesc(lineUserId)
+                .flatMap(note -> extractionRepository.findByNoteIdAndActiveTrue(note.getId()))
+                .orElse(null);
     }
 
     /** 這位使用者目前還有效的項目，跨所有語音，依顯示順序排好。 */
