@@ -135,6 +135,8 @@ class NoteCommandParser {
         }
         yield null;
       }
+      // ADD 與 LIST 不看 itemIndex——模型有時會順手填一個（實測填過 -1）。
+      // 那個值不會被使用，不需要因此讓整批指令失敗。
       case ADD -> (op.title() == null || op.title().isBlank()) ? "要新增什麼呢？" : null;
       case LIST -> null;
     };

@@ -9,7 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 把 outbox 裡的待送事件真的送出去。
@@ -30,12 +33,17 @@ public class OutboxPoller {
     private final OutboxEventRepository outboxRepository;
     /** 事件型別 → 處理器。Spring 把所有實作注入進來，這裡不用認識任何一個。 */
     private final Map<String, OutboxEventHandler> handlers;
+    /** 處理器跑在自己的交易裡——理由見 {@link #runIsolated}。 */
+    private final TransactionTemplate handlerTx;
 
     public OutboxPoller(OutboxEventRepository outboxRepository,
-            List<OutboxEventHandler> handlers) {
+            List<OutboxEventHandler> handlers,
+            PlatformTransactionManager transactionManager) {
         this.outboxRepository = outboxRepository;
         this.handlers = handlers.stream()
                 .collect(Collectors.toMap(OutboxEventHandler::eventType, Function.identity()));
+        this.handlerTx = new TransactionTemplate(transactionManager);
+        this.handlerTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Scheduled(fixedDelayString = "${svra.outbox.poll-interval-ms:2000}")
@@ -52,7 +60,7 @@ public class OutboxPoller {
                 if (handler == null) {
                     throw new IllegalStateException("沒有處理器對應事件型別：" + event.getEventType());
                 }
-                handler.handle(event.getPayload());
+                runIsolated(() -> handler.handle(event.getPayload()));
 
                 event.markSent();
             } catch (Exception e) {
@@ -64,7 +72,7 @@ public class OutboxPoller {
                 // 該怎麼善後只有它知道（例如把 note 標成 FAILED）。
                 if (event.getStatus() == OutboxStatus.FAILED && handler != null) {
                     try {
-                        handler.onGiveUp(event.getPayload());
+                        runIsolated(() -> handler.onGiveUp(event.getPayload()));
                     } catch (Exception cleanupFailure) {
                         log.error("放棄後的收尾也失敗：id={}", event.getId(), cleanupFailure);
                     }

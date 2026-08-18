@@ -102,8 +102,10 @@ public class NoteCommandService {
         // 🔴 先把編號解析成項目，再開始動手。
         // 邊刪邊用編號取值的話，「刪掉第一筆跟第三筆」會刪錯第二筆——
         // 刪掉第一筆之後，原本的第三筆已經變成第二筆了。
+        // 只有指名項目的動作要解析目標。ADD 與 LIST 不指涉任何一筆，
+        // 但模型仍可能在那些動作上填 itemIndex——不能因為它填了就當真。
         List<NoteItem> targets = command.ops().stream()
-                .map(op -> op.itemIndex() == null ? null : items.get(op.itemIndex() - 1))
+                .map(op -> needsTarget(op.action()) ? items.get(op.itemIndex() - 1) : null)
                 .toList();
 
         StringBuilder reply = new StringBuilder();
@@ -159,6 +161,12 @@ public class NoteCommandService {
 
         pushClient.pushText(payload.lineUserId(), reply.toString().strip());
         log.info("指令已處理：{} 個動作 messageId={}", command.ops().size(), payload.commandMessageId());
+    }
+
+    private static boolean needsTarget(NoteCommand.Action action) {
+        return action == NoteCommand.Action.DELETE
+                || action == NoteCommand.Action.UPDATE_TITLE
+                || action == NoteCommand.Action.UPDATE_TIME;
     }
 
     /** 使用者引用了某則推播時，精準定位到那一批；沒引用回 null。 */
