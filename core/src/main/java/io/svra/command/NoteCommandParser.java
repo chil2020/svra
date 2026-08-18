@@ -30,13 +30,15 @@ class NoteCommandParser {
       目前的清單（編號就是使用者說的「第幾筆」）：
       %s
 
-      action 只能是這四種：
+      action 只能是這五種：
       - DELETE       刪掉某一筆
       - UPDATE_TITLE 改某一筆的標題
       - UPDATE_TIME  改某一筆的時間
+      - LIST         列出目前的清單（例如「現在有什麼行程」「列出來看看」「剛剛改完長怎樣」）
       - UNKNOWN      看不懂，或指的項目不在清單裡
 
       規則：
+      - LIST 不需要 itemIndex，留空。使用者只是想看現況，不要順便改東西
       - itemIndex 必須是清單裡真實存在的編號。使用者可能說「第二筆」，
         也可能說內容（例如「阿里山那筆」），兩種都要對應到正確的編號
       - 使用者沒指明是哪一筆，而清單只有一筆時，就是那一筆；
@@ -79,6 +81,7 @@ class NoteCommandParser {
 
       // itemIndex 必須指向真實存在的項目
       if (result.action() != NoteCommand.Action.UNKNOWN
+          && result.action() != NoteCommand.Action.LIST
           && (result.itemIndex() == null || result.itemIndex() < 1 || result.itemIndex() > items.size())) {
         return new NoteCommand(NoteCommand.Action.UNKNOWN, null, null, null,
             "找不到你說的那一筆，可以說編號嗎？", null);

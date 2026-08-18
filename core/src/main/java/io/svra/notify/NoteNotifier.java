@@ -36,8 +36,7 @@ public class NoteNotifier {
             NoteCategory.IDEA, "💡 想法");
 
     /** 決定區塊順序：有時間的排前面，想法放最後。 */
-    private static final List<NoteCategory> ORDER =
-            List.of(NoteCategory.SCHEDULE, NoteCategory.TODO, NoteCategory.IDEA);
+    // 顯示順序由 NoteCategory 統一定義——這裡再維護一份，就會跟指令解析那邊漂移。
 
     private final NoteRepository noteRepository;
     private final NoteExtractionRepository extractionRepository;
@@ -66,19 +65,21 @@ public class NoteNotifier {
             return;
         }
 
-        String messageId = pushClient.pushText(note.getLineUserId(), render(extraction.getItems()));
+        String messageId = pushClient.pushText(note.getLineUserId(), render(extraction.getOrderedItems()));
         // 記下來，使用者引用這則訊息下指令時才對應得回這批項目。
         // 交易在推播成功後才提交——推播失敗就整筆回滾，由 outbox 重試。
         extraction.recordNotified(messageId);
     }
 
-    static String render(List<NoteItem> items) {
+    /** 供推播與「列出行程」共用——兩邊必須是同一份編號。 */
+    public static String render(List<NoteItem> items) {
         Map<NoteCategory, List<NoteItem>> byCategory = items.stream()
+                .sorted(NoteCategory.itemOrder())
                 .collect(Collectors.groupingBy(NoteItem::getCategory));
 
         StringBuilder sb = new StringBuilder("📝 已整理好你的語音筆記\n");
         int index = 0;
-        for (NoteCategory category : ORDER) {
+        for (NoteCategory category : NoteCategory.DISPLAY_ORDER) {
             List<NoteItem> group = byCategory.get(category);
             if (group == null || group.isEmpty()) {
                 continue;

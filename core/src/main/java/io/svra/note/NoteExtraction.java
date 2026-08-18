@@ -85,5 +85,13 @@ public class NoteExtraction {
     public boolean isActive() { return active; }
     public Instant getCreatedAt() { return createdAt; }
     public List<NoteItem> getItems() { return items; }
+
+    /**
+     * 依顯示順序排好的項目。**要編號給使用者看、或要把編號解回項目，都用這個**，
+     * 不要用 {@link #getItems()}——那是 JPA 給什麼就是什麼，順序不保證。
+     */
+    public List<NoteItem> getOrderedItems() {
+        return items.stream().sorted(NoteCategory.itemOrder()).toList();
+    }
     public String getNotifyMessageId() { return notifyMessageId; }
 }

@@ -19,8 +19,9 @@ import io.svra.outbox.OutboxEventRepository;
 import io.svra.note.NoteItem;
 import io.svra.note.NoteExtractionRepository;
 import io.svra.note.NoteExtraction;
+import io.svra.notify.NoteNotifier;
 
-/** 處理使用者用文字下的指令（刪除、改標題、改時間）。 */
+/** 處理使用者用文字下的指令（刪除、改標題、改時間、列出清單）。 */
 @Service
 public class NoteCommandService {
 
@@ -83,7 +84,8 @@ public class NoteCommandService {
             return;
         }
 
-        List<NoteItem> items = extraction.getItems();
+        // 編號必須跟推播訊息上的一致，否則「第二筆」會指到別的東西
+        List<NoteItem> items = extraction.getOrderedItems();
         NoteCommand command = parser.parse(payload.text(), items);
 
         String reply;
@@ -104,15 +106,27 @@ public class NoteCommandService {
                 target.reschedule(NoteCommandParser.parseOccursAt(command.newOccursAt()));
                 yield "🕘 已改時間：" + target.getTitle();
             }
+            case LIST -> null;   // 清單稍後重繪：這一輪可能還做了修改，要反映修改後的結果
             case UNKNOWN -> "🤔 " + (command.reason() == null ? "看不懂這個指令。" : command.reason());
         };
+
+        if (command.action() == NoteCommand.Action.LIST) {
+            // 重新讀一次而不是沿用上面的 items——LIST 也可能跟修改指令一起下，
+            // 要秀的是「改完之後」的樣子。
+            reply = NoteNotifier.render(extraction.getOrderedItems());
+        }
 
         // 只做了一半就要說——不然使用者會以為兩件事都交代了。
         if (command.unhandled() != null && !command.unhandled().isBlank()) {
             reply += "\n\n⚠️ 這部分我還不會處理：" + command.unhandled();
         }
 
-        pushClient.pushText(payload.lineUserId(), reply);
+        String messageId = pushClient.pushText(payload.lineUserId(), reply);
+        if (command.action() == NoteCommand.Action.LIST) {
+            // 這則清單成為新的引用對象——使用者看著它說「第二筆」，
+            // 要能對應回這批項目。
+            extraction.recordNotified(messageId);
+        }
         log.info("指令已處理：action={} messageId={}", command.action(), payload.commandMessageId());
     }
 
