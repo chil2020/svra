@@ -394,8 +394,13 @@ ollama pull qwen3.5:9b    # 約 6.6 GB，建議 16 GB 以上記憶體
 docker compose up -d      # postgres + rabbitmq + redis + whisper-worker + core
 
 # 對外入口：LINE 要打得到 webhook
-ngrok http 8080           # 再把 URL 更新到 LINE Developers Console
+ngrok start svra          # 固定網域，webhook URL 設定一次就不用再改
 ```
+
+`ngrok.yml` 裡綁了固定網域。用臨時網址（`ngrok http 8080` 或 cloudflared quick tunnel）
+每次重啟都會換網址，得回 LINE 後台重貼一次——而它斷線時**不會有任何提示**，
+只會安靜地收不到訊息。macOS 上裝成 LaunchAgent（`~/Library/LaunchAgents/io.svra.ngrok.plist`）
+讓它開機自動起、掛掉自動重啟。
 
 轉錄模型（Breeze-ASR-25）首次啟動時自動下載約 1.5 GB，快取在 docker volume。
 
