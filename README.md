@@ -453,7 +453,7 @@ cd core && mvn test -Peval # eval 集（會呼叫真的 LLM，慢）
 ## 專案結構
 
 ```
-├── core/             # Spring Boot 核心（開發清單見 core/TODO.md）
+├── core/             # Spring Boot 核心
 │   └── src/main/java/io/svra/
 │       ├── webhook/      # 入站：LINE webhook 驗簽、事件解析與分派
 │       ├── line/         # 出站：音檔下載、推播（對其他模組零依賴）
