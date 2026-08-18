@@ -359,29 +359,69 @@ VAD 沒東西可切，只在語音邊界削掉內容。**理由留在程式碼�
 
 ---
 
+### 15. 全部服務進 compose，但 Ollama 留在宿主機
+
+**決策**：core 也容器化，`restart: unless-stopped`；**唯獨 Ollama 不進容器**。
+
+**為什麼要容器化 core**：原本 core 靠 `./run-core.sh` 在終端機裡跑，
+關掉視窗或重開機它就沒了——而**其他四個服務都還活著**，
+看起來一切正常，實際上 webhook 沒有人接。LINE 不會把那段時間的訊息補送，
+**那些語音就是永久遺失**。這不是重試機制救得回來的，
+因為 outbox 要能重試的前提是「事件已經寫進資料庫」。
+
+**為什麼 Ollama 不進容器**：模型權重 6.6 GB，而且容器裡吃不到 macOS 的
+Metal GPU 加速，純 CPU 推論會慢好幾倍。所以它留在宿主機，
+容器用 `host.docker.internal` 連回去。
+
+**代價**：多了一個「要記得啟動」的東西，只是從 core 換成了 Ollama。
+真正的解法是把 Ollama 也交給行程管理（`brew services`），而不是手動開。
+
+**什麼情況我會反悔**：部署到 Linux 主機且有 NVIDIA GPU 時，
+Ollama 容器可以直接吃 `--gpus all`，那時就沒有留在宿主機的理由了。
+
+---
+
 ## 快速開始
 
 ```bash
 cp .env.example .env      # 填入 LINE 憑證（憑證一律走環境變數，不進版控）
-docker compose up -d      # postgres + rabbitmq + redis + whisper-worker
 
-# 地端 LLM（抽取層用，不需要任何付費 API）
+# 地端 LLM。Ollama 跑在宿主機不是容器裡——模型權重大，
+# 而且容器裡吃不到 macOS 的 Metal 加速。
 brew install ollama && brew services start ollama
 ollama pull qwen3.5:9b    # 約 6.6 GB，建議 16 GB 以上記憶體
 
-# 轉錄模型（Breeze-ASR-25）首次啟動時自動下載約 1.5 GB，快取在 docker volume
+docker compose up -d      # postgres + rabbitmq + redis + whisper-worker + core
 
-# core 在本機跑（預設值已指向 compose 與 localhost:11434）
-./run-core.sh
-
-# 測試
-cd core && mvn test
+# 對外入口：LINE 要打得到 webhook
+ngrok http 8080           # 再把 URL 更新到 LINE Developers Console
 ```
+
+轉錄模型（Breeze-ASR-25）首次啟動時自動下載約 1.5 GB，快取在 docker volume。
+
+### 開發時只跑 core 在本機
+
+改 core 的程式時不必每次重建映像檔：
+
+```bash
+docker compose stop core   # 兩邊都綁 8080，先停容器那份
+./run-core.sh              # 讀 .env 並把 AUDIO_DIR 指到共享目錄
+```
+
+`run-core.sh` 存在的理由是 `.env` 只有 compose 在讀，`mvn spring-boot:run` 不會讀；
+而 `audio-dir` 用相對路徑會依啟動目錄而變，兩端就會讀寫不同地方。
 
 要換模型只需覆寫環境變數，不用改程式：
 
 ```bash
 OLLAMA_MODEL=llama3.1:8b ./run-core.sh
+```
+
+測試：
+
+```bash
+cd core && mvn test        # 單元測試
+cd core && mvn test -Peval # eval 集（會呼叫真的 LLM，慢）
 ```
 
 ## 專案結構

@@ -59,25 +59,39 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── core（Spring Boot）────────────────────────────────────────────
-  # 第 1 週開發期建議直接在本機 `cd core && mvn spring-boot:run`
-  # （application.yml 的預設值已指向 localhost 的三個基礎服務）。
-  # 要容器化時補上 core/Dockerfile 再解開下面註解：
-  #
-  # core:
-  #   build: ./core
-  #   env_file: .env
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - ./data/audio:/data/audio
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     rabbitmq:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
+  core:
+    build: ./core
+    # .env 提供 LINE 憑證與 postgres/rabbitmq 帳密；
+    # 下面的 environment 覆蓋掉那些「本機開發用 localhost」的預設值——
+    # 在容器裡 localhost 是容器自己，要走 compose 的服務名。
+    env_file: .env
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-svra}
+      RABBITMQ_HOST: rabbitmq
+      REDIS_HOST: redis
+      AUDIO_DIR: /data/audio
+      # Ollama 跑在宿主機不是容器裡（模型權重大、要用 Metal 加速）
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/audio:/data/audio          # 與 whisper-worker 交換音檔
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux 上沒有這行會找不到宿主機
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s     # Spring Boot 冷啟動要一段時間，太短會被誤判成掛掉
+    restart: unless-stopped
 
 volumes:
   pgdata:
