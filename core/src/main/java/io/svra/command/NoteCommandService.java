@@ -1,5 +1,7 @@
 package io.svra.command;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -19,6 +21,8 @@ import io.svra.outbox.OutboxEventRepository;
 import io.svra.note.NoteItem;
 import io.svra.note.NoteExtractionRepository;
 import io.svra.note.NoteExtraction;
+import io.svra.note.NoteCategory;
+import io.svra.note.NoteItemRepository;
 import io.svra.notify.NoteNotifier;
 
 /** 處理使用者用文字下的指令（刪除、改標題、改時間、列出清單）。 */
@@ -33,9 +37,13 @@ public class NoteCommandService {
     private final LinePushClient pushClient;
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
+    private final NoteItemRepository itemRepository;
+    private final Clock clock;
 
     public NoteCommandService(NoteRepository noteRepository,
             NoteExtractionRepository extractionRepository,
+            NoteItemRepository itemRepository,
+            Clock clock,
             NoteCommandParser parser,
             LinePushClient pushClient,
             OutboxEventRepository outboxRepository,
@@ -46,6 +54,8 @@ public class NoteCommandService {
         this.pushClient = pushClient;
         this.outboxRepository = outboxRepository;
         this.objectMapper = objectMapper;
+        this.itemRepository = itemRepository;
+        this.clock = clock;
     }
 
     /**
@@ -78,21 +88,22 @@ public class NoteCommandService {
 
     @Transactional
     public void applyCommand(CommandPayload payload) {
-        NoteExtraction extraction = resolveTarget(payload);
-        if (extraction == null) {
-            pushClient.pushText(payload.lineUserId(), "找不到可以修改的筆記，先傳一則語音吧。");
+        // 有引用就鎖定那一批——編號跟那則推播上的一致。
+        // 沒有引用時要看的是「目前還有什麼」，那會跨越多則語音，不是最後一則而已。
+        NoteExtraction quoted = resolveQuoted(payload);
+        List<NoteItem> items = quoted != null ? quoted.getOrderedItems() : upcoming(payload.lineUserId());
+
+        if (items.isEmpty()) {
+            pushClient.pushText(payload.lineUserId(), "目前沒有任何項目，先傳一則語音吧。");
             return;
         }
-
-        // 編號必須跟推播訊息上的一致，否則「第二筆」會指到別的東西
-        List<NoteItem> items = extraction.getOrderedItems();
         NoteCommand command = parser.parse(payload.text(), items);
 
         String reply;
         reply = switch (command.action()) {
             case DELETE -> {
                 NoteItem target = items.get(command.itemIndex() - 1);
-                extraction.removeItem(target);
+                target.getExtraction().removeItem(target);
                 yield "🗑 已刪除：" + target.getTitle();
             }
             case UPDATE_TITLE -> {
@@ -113,7 +124,7 @@ public class NoteCommandService {
         if (command.action() == NoteCommand.Action.LIST) {
             // 重新讀一次而不是沿用上面的 items——LIST 也可能跟修改指令一起下，
             // 要秀的是「改完之後」的樣子。
-            reply = NoteNotifier.render(extraction.getOrderedItems());
+            reply = NoteNotifier.render(upcoming(payload.lineUserId()));
         }
 
         // 只做了一半就要說——不然使用者會以為兩件事都交代了。
@@ -121,29 +132,26 @@ public class NoteCommandService {
             reply += "\n\n⚠️ 這部分我還不會處理：" + command.unhandled();
         }
 
-        String messageId = pushClient.pushText(payload.lineUserId(), reply);
-        if (command.action() == NoteCommand.Action.LIST) {
-            // 這則清單成為新的引用對象——使用者看著它說「第二筆」，
-            // 要能對應回這批項目。
-            extraction.recordNotified(messageId);
-        }
+        pushClient.pushText(payload.lineUserId(), reply);
         log.info("指令已處理：action={} messageId={}", command.action(), payload.commandMessageId());
     }
 
-    /**
-     * 有引用就用引用的那則推播精準定位；沒引用就退回這位使用者最近一次的抽取。
-     */
-    private NoteExtraction resolveTarget(CommandPayload payload) {
-        if (payload.quotedMessageId() != null) {
-            NoteExtraction quoted = extractionRepository
-                    .findByNotifyMessageId(payload.quotedMessageId()).orElse(null);
-            if (quoted != null) {
-                return quoted;
-            }
-            log.debug("引用的訊息找不到對應抽取，退回最近一次：quoted={}", payload.quotedMessageId());
+    /** 使用者引用了某則推播時，精準定位到那一批；沒引用回 null。 */
+    private NoteExtraction resolveQuoted(CommandPayload payload) {
+        if (payload.quotedMessageId() == null) {
+            return null;
         }
-        return noteRepository.findTopByLineUserIdOrderByIdDesc(payload.lineUserId())
-                .flatMap(note -> extractionRepository.findByNoteIdAndActiveTrue(note.getId()))
-                .orElse(null);
+        NoteExtraction quoted = extractionRepository
+                .findByNotifyMessageId(payload.quotedMessageId()).orElse(null);
+        if (quoted == null) {
+            log.debug("引用的訊息找不到對應抽取，改用整體清單：quoted={}", payload.quotedMessageId());
+        }
+        return quoted;
+    }
+
+    /** 這位使用者目前還有效的項目，跨所有語音，依顯示順序排好。 */
+    private List<NoteItem> upcoming(String lineUserId) {
+        return itemRepository.findUpcoming(lineUserId, Instant.now(clock))
+                .stream().sorted(NoteCategory.itemOrder()).toList();
     }
 }

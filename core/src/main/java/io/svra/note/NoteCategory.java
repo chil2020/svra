@@ -21,9 +21,16 @@ public enum NoteCategory {
         return DISPLAY_ORDER.indexOf(this);
     }
 
-    /** 分類先、同分類內依 id——不給定序的話 @OneToMany 的順序是不保證的。 */
+    /**
+     * 分類先，同分類內依時間，最後才依 id。
+     *
+     * <p>時間要排在 id 前面：跨多則語音列出「接下來的行程」時，使用者要的是
+     * 時間順序，不是當初錄音的順序。沒有時間的（待辦、想法）排在後面。
+     * 不給定序的話 {@code @OneToMany} 的順序是不保證的。
+     */
     public static Comparator<NoteItem> itemOrder() {
         return Comparator.<NoteItem>comparingInt(i -> i.getCategory().displayRank())
+                .thenComparing(NoteItem::getOccursAt, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(NoteItem::getId, Comparator.nullsLast(Comparator.naturalOrder()));
     }
 }

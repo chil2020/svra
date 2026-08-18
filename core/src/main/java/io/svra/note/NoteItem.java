@@ -72,6 +72,7 @@ public class NoteItem {
     }
 
     public Long getId() { return id; }
+    public NoteExtraction getExtraction() { return extraction; }
     public NoteCategory getCategory() { return category; }
     public String getTitle() { return title; }
     public Instant getOccursAt() { return occursAt; }
