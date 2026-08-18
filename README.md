@@ -412,7 +412,7 @@ docker compose up -d      # postgres + rabbitmq + redis + whisper-worker
 ngrok start svra          # 固定網域，webhook URL 設定一次就不用再改
 ```
 
-`ngrok.yml` 裡綁了固定網域。用臨時網址（`ngrok http 8080` 或 cloudflared quick tunnel）
+`ngrok.yml` 裡綁了固定網域。用臨時網址（`ngrok start svra` 或 cloudflared quick tunnel）
 每次重啟都會換網址，得回 LINE 後台重貼一次——而它斷線時**不會有任何提示**，
 只會安靜地收不到訊息。macOS 上裝成 LaunchAgent（`~/Library/LaunchAgents/io.svra.ngrok.plist`）
 讓它開機自動起、掛掉自動重啟。
@@ -431,7 +431,7 @@ core 本身在本機跑（改一行不用重建映像檔）：
 docker compose --profile full up -d    # 連 core 一起
 ```
 
-⚠️ 兩邊都綁 8080，不要同時開。容器版沒停乾淨的話，本機這支會啟動失敗；
+⚠️ 兩邊都綁 8443，不要同時開。容器版沒停乾淨的話，本機這支會啟動失敗；
 反過來，本機那支沒關就 `--profile full`，容器的埠會發布不出去而**不報錯**。
 
 `run-core.sh` 存在的理由是 `.env` 只有 compose 在讀，`mvn spring-boot:run` 不會讀；

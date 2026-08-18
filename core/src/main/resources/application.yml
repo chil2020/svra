@@ -1,3 +1,7 @@
+server:
+  # 8080 太常被別的東西佔走，改用 8443（1024 以上不需要 root）
+  port: ${SERVER_PORT:8443}
+
 spring:
   application:
     name: svra-core
