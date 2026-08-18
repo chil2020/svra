@@ -81,4 +81,43 @@ public class OutboxPoller {
             }
         }
     }
+
+    /**
+     * 把處理器跑在獨立的交易裡。
+     *
+     * <p>🔴 少了這一層，重試機制是假的：處理器的 {@code @Transactional} 在例外往外
+     * 傳時會把交易標成 rollback-only，就算這裡把例外接住，外層 commit 時仍會拋
+     * {@code UnexpectedRollbackException}——連 {@code markFailed()} 累加的次數
+     * 都一起被回滾。實測就是 {@code attempts} 永遠停在 0、事件無限重試，
+     * 而且同一批的其他事件也跟著陪葬。
+     *
+     * <p>代價是處理器的副作用會先於狀態更新提交：處理器成功、外層卻失敗時，
+     * 事件仍是 PENDING 而會再跑一次。這是 outbox 本來就有的 at-least-once 性質
+     * （見 README 決策 3），消費端要冪等。
+     */
+    private void runIsolated(ThrowingRunnable action) throws Exception {
+        try {
+            handlerTx.executeWithoutResult(status -> {
+                try {
+                    action.run();
+                } catch (Exception e) {
+                    throw new HandlerFailure(e);
+                }
+            });
+        } catch (HandlerFailure wrapper) {
+            throw (Exception) wrapper.getCause();
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    /** 只為了讓受檢例外穿過 TransactionTemplate，不對外。 */
+    private static class HandlerFailure extends RuntimeException {
+        HandlerFailure(Exception cause) {
+            super(cause);
+        }
+    }
 }
