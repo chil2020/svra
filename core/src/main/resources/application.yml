@@ -18,12 +18,38 @@ spring:
     port: 5672
     username: ${RABBITMQ_USER:svra}
     password: ${RABBITMQ_PASSWORD:svra-dev-only}
+    listener:
+      simple:
+        # 預設是 true：listener 一拋例外，訊息就回到佇列頭被立刻再收一次——
+        # 沒有退避的忙迴圈，一則壞訊息可以卡住整條線。改成 false 之後
+        # 重試耗盡的訊息會走 x-dead-letter-exchange 進 DLQ，由 DLQ listener 收尾。
+        default-requeue-rejected: false
+        retry:
+          # 先在行程內退避重試（資料庫短暫抖動這類問題重試就會好），
+          # 真的救不回來才進 DLQ。
+          enabled: true
+          max-attempts: 3
+          initial-interval: 2s
+          multiplier: 2
+          max-interval: 30s
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: 6379
 
 management:
+  server:
+    # 🔴 actuator 不跟 webhook 共用埠。
+    # 8443 是 ngrok 對外的那個埠，而 /actuator/prometheus 會吐出 JVM、
+    # 連線池、HTTP 路由等內部細節。保護它靠的是「不在對外的埠上」，
+    # 不是密碼——決策 20 的理由沒有變。
+    #
+    # 但 8444 不會因為換了埠就自動豁免 Spring Security：決策 22 之後，
+    # Boot 的 ServletManagementChildContextConfiguration 會把父 context 的
+    # springSecurityFilterChain 也註冊進 management 子 context。
+    # SecurityConfig 因此顯式給了 actuator 一條 permitAll 的 chain——
+    # 拿掉它，Prometheus 會靜靜地抓不到，啟動時完全沒有徵兆。
+    port: ${MANAGEMENT_PORT:8444}
   endpoints:
     web:
       exposure:
@@ -37,6 +63,14 @@ svra:
   audio-dir: ${AUDIO_DIR:./data/audio}
   outbox:
     poll-interval-ms: 2000
+  llm:
+    # 同一段逐字稿重抽不必再打模型一次。地端沒有金錢成本，但一次抽取 12 秒起跳，
+    # 而 eval 與重跑都會一再送進同樣的輸入。
+    cache-ttl: 24h
+    # 地端 Ollama 只有一份，同時湧進來的請求會互相搶 CPU。這不是省錢，是保護
+    # 唯一那個推論資源。
+    rate-limit: 30
+    rate-limit-window: 1m
   # 佇列名稱需與 whisper-worker/main.py 的 topology 一致
   mq:
     exchange: svra.direct
@@ -46,6 +80,7 @@ svra:
     job-dlq: transcribe.jobs.dlq
     result-queue: transcribe.results
     result-routing-key: transcribe.result
+    result-dlq: transcribe.results.dlq
 
 # Spring AI。地端 Ollama——換供應商只要換 starter 與這一段，
 # ChatClient 的呼叫端不用改。
