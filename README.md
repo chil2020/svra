@@ -862,6 +862,10 @@ segment 時間戳全是 `None`，連事後裁掉都做不到。
 
 ## 快速開始
 
+> 這一節是**第一次安裝**。平常怎麼開、怎麼確認活著、壞了怎麼分辨，
+> 見 [startService.md](startService.md)。
+
+
 ```bash
 cp .env.example .env      # 填入 LINE 憑證（憑證一律走環境變數，不進版控）
                           # ⚠️ 兩個 LINE 憑證都是必填，沒填會「啟動失敗」而不是跑到一半才錯
