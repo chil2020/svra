@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.ObjectMapper;
 
 import io.svra.line.LinePushClient;
+import io.svra.llm.LlmRateLimiter;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
 import io.svra.note.NoteExtractionRepository;
@@ -46,6 +47,7 @@ class MultiOpCommandTest {
     @Mock LinePushClient pushClient;
     @Mock OutboxEventRepository outboxRepository;
     @Mock ObjectMapper objectMapper;
+    @Mock LlmRateLimiter rateLimiter;
 
     private NoteCommandService service;
     private NoteExtraction extraction;
@@ -54,7 +56,7 @@ class MultiOpCommandTest {
     void setUp() {
         service = new NoteCommandService(noteRepository, extractionRepository, itemRepository,
                 Clock.fixed(Instant.parse("2026-08-18T09:00:00Z"), ZoneId.of("Asia/Taipei")),
-                parser, pushClient, outboxRepository, objectMapper);
+                parser, pushClient, outboxRepository, objectMapper, rateLimiter);
 
         extraction = NoteExtraction.of(1L, "raw", "v-test");
         extraction.addItem(item("第一筆"));

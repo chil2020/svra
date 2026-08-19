@@ -1,0 +1,24 @@
+# GitGuardian（ggshield）設定
+#
+# 搭配 pre-commit 使用，讓誤報在離開本機之前就被消音，而不是每次 PR 都要人工再判一次：
+#   pipx install ggshield && ggshield install -m local
+#
+# ⚠️ 這個檔案影響的是 ggshield（本機／CI）。GitGuardian 儀表板上已經開出來的
+# incident 仍需在網頁上標記為 false positive——兩邊是各自獨立的。
+
+version: 2
+
+secret:
+  ignored_matches:
+    # HMAC-SHA256 的輸出，不是憑證。金鑰與輸入都明寫在同一個檔案裡：
+    #   printf '%s' '{"events":[]}' | openssl dgst -sha256 -hmac 'test-secret' -binary | base64
+    # 期望值刻意由外部工具算出而不是用本專案的程式算——否則等於拿自己驗自己，
+    # 演算法或編碼寫錯也照樣全綠。這是密碼學實作的標準測法（known-answer test），
+    # 而 KAT 的輸出必然是一串高熵字串，看起來就像憑證。
+    - name: "LineSignatureTest 的 HMAC known-answer test 向量"
+      match: "Va12JSFB+Fs03rxzdvh7icVLk546dmNGSrPkkClJW/U="
+
+  ignored_paths:
+    # 宿主機跑 MLX 用的虛擬環境（見 eval/README.md），不進版控，
+    # 但本機掃描會掃到裡面的第三方套件。
+    - "whisper-worker/.venv/**"

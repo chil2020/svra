@@ -54,9 +54,34 @@ public class RabbitConfig {
         return QueueBuilder.durable(mq.jobDlq()).build();
     }
 
+    /**
+     * 結果佇列也要掛死信，理由跟 job 佇列一樣——而它一度沒有。
+     *
+     * <p>少了這個，{@code TranscribeResultListener} 拋出的例外只會讓訊息 requeue，
+     * 立刻被同一個 listener 再收一次，形成沒有退避的忙迴圈。一則處理不了的結果訊息
+     * 就能卡住整條線。
+     *
+     * <p>⚠️ AMQP 的佇列參數<b>建立後不能改</b>。既有環境升級到這版時，
+     * {@code transcribe.results} 會因為參數不符而 PRECONDITION_FAILED——
+     * 要先把那個佇列刪掉再啟動（見 README 的升級說明）。
+     */
     @Bean
     Queue transcribeResultsQueue() {
-        return QueueBuilder.durable(mq.resultQueue()).build();
+        return QueueBuilder.durable(mq.resultQueue())
+                .withArguments(Map.of(
+                        "x-dead-letter-exchange", mq.dlx(),
+                        "x-dead-letter-routing-key", mq.resultRoutingKey()))
+                .build();
+    }
+
+    @Bean
+    Queue transcribeResultsDlq() {
+        return QueueBuilder.durable(mq.resultDlq()).build();
+    }
+
+    @Bean
+    Binding resultDlqBinding() {
+        return BindingBuilder.bind(transcribeResultsDlq()).to(svraDlx()).with(mq.resultRoutingKey());
     }
 
     @Bean

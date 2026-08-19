@@ -19,20 +19,20 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
 
     private final LineContentClient lineContentClient;
     private final RabbitTemplate rabbitTemplate;
-    private final NoteService noteService;
+    private final TranscriptionFailureReporter failureReporter;
     private final ObjectMapper objectMapper;
     private final MqProperties mq;
     private final SvraProperties svra;
 
     TranscribeRequestedHandler(LineContentClient lineContentClient,
             RabbitTemplate rabbitTemplate,
-            NoteService noteService,
+            TranscriptionFailureReporter failureReporter,
             ObjectMapper objectMapper,
             MqProperties mq,
             SvraProperties svra) {
         this.lineContentClient = lineContentClient;
         this.rabbitTemplate = rabbitTemplate;
-        this.noteService = noteService;
+        this.failureReporter = failureReporter;
         this.objectMapper = objectMapper;
         this.mq = mq;
         this.svra = svra;
@@ -55,10 +55,15 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
                 new TranscribeJob(messageId, target.getFileName().toString(), null));
     }
 
-    /** 放棄之後沒人會再送這則任務，note 不能永遠停在 PENDING。 */
+    /**
+     * 放棄之後沒人會再送這則任務，note 不能永遠停在 PENDING。
+     *
+     * <p>這是兩條放棄路徑之一（任務根本沒送出去）；另一條在
+     * {@link TranscribeDlqListener}。兩條共用同一個收尾。
+     */
     @Override
     public void onGiveUp(String payload) {
-        noteService.markTranscriptionFailed(parse(payload).sourceMessageId());
+        failureReporter.report(parse(payload).sourceMessageId());
     }
 
     private NoteEventPayload parse(String payload) {

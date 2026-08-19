@@ -6,7 +6,6 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +13,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import io.svra.line.LinePushClient;
+import io.svra.llm.LlmRateLimiter;
 import io.svra.note.NoteRepository;
 import io.svra.note.NoteService;
 import io.svra.outbox.OutboxEvent;
@@ -38,6 +38,7 @@ public class NoteCommandService {
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
     private final NoteItemRepository itemRepository;
+    private final LlmRateLimiter rateLimiter;
     private final Clock clock;
 
     public NoteCommandService(NoteRepository noteRepository,
@@ -47,7 +48,8 @@ public class NoteCommandService {
             NoteCommandParser parser,
             LinePushClient pushClient,
             OutboxEventRepository outboxRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            LlmRateLimiter rateLimiter) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
         this.parser = parser;
@@ -55,6 +57,7 @@ public class NoteCommandService {
         this.outboxRepository = outboxRepository;
         this.objectMapper = objectMapper;
         this.itemRepository = itemRepository;
+        this.rateLimiter = rateLimiter;
         this.clock = clock;
     }
 
@@ -65,16 +68,26 @@ public class NoteCommandService {
     @Transactional
     public void recordCommand(String lineUserId, String commandMessageId,
             String text, String quotedMessageId) {
+        // 🔴 指令是這個系統裡唯一沒有其他去重機制的入口。
+        // 語音有 notes.source_message_id 的唯一約束擋著重送，文字訊息不建 note，
+        // 只寫一筆 outbox——沒有冪等鍵的話 LINE 逾時重送就是執行兩次「刪掉第一筆」。
+        // 這裡曾經寫著 catch (DataIntegrityViolationException)，但表上根本沒有
+        // 約束可以違反，那是一段永遠不會執行的死碼。
+        String payload;
         try {
-            outboxRepository.save(OutboxEvent.pending(
-                    commandMessageId,
-                    NoteService.EVENT_COMMAND_REQUESTED,
-                    objectMapper.writeValueAsString(new CommandPayload(
-                            lineUserId, commandMessageId, text, quotedMessageId))));
-        } catch (DataIntegrityViolationException e) {
-            log.debug("重複的指令訊息，已忽略：messageId={}", commandMessageId);
+            payload = objectMapper.writeValueAsString(new CommandPayload(
+                    lineUserId, commandMessageId, text, quotedMessageId));
         } catch (JacksonException e) {
             throw new IllegalStateException("序列化指令 payload 失敗", e);
+        }
+
+        if (outboxRepository.insertIfAbsent(
+                commandMessageId,
+                NoteService.EVENT_COMMAND_REQUESTED,
+                payload,
+                OutboxEvent.dedupeKeyFor(
+                        NoteService.EVENT_COMMAND_REQUESTED, commandMessageId)) == 0) {
+            log.debug("重複的指令訊息，已忽略：messageId={}", commandMessageId);
         }
     }
 
@@ -92,6 +105,9 @@ public class NoteCommandService {
         // 沒有引用時要看的是「目前還有什麼」，那會跨越多則語音，不是最後一則而已。
         NoteExtraction quoted = resolveQuoted(payload);
         List<NoteItem> items = quoted != null ? quoted.getOrderedItems() : upcoming(payload.lineUserId());
+
+        // 指令解析也是一次 LLM 呼叫，算同一份額度。
+        rateLimiter.consume(payload.lineUserId());
 
         NoteCommand command = parser.parse(payload.text(), items);
         if (command.isUnknown()) {
@@ -151,7 +167,7 @@ public class NoteCommandService {
             if (!reply.isEmpty()) {
                 reply.append('\n');
             }
-            reply.append(NoteNotifier.render(upcoming(payload.lineUserId())));
+            reply.append(NoteNotifier.renderCurrent(upcoming(payload.lineUserId())));
         }
 
         // 只做了一半就要說——不然使用者會以為都交代了。

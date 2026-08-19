@@ -1,5 +1,7 @@
 package io.svra.outbox;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -33,23 +35,28 @@ public class OutboxPoller {
     private final OutboxEventRepository outboxRepository;
     /** 事件型別 → 處理器。Spring 把所有實作注入進來，這裡不用認識任何一個。 */
     private final Map<String, OutboxEventHandler> handlers;
-    /** 處理器跑在自己的交易裡——理由見 {@link #runIsolated}。 */
+    /** 跑處理器時把 poller 自己的交易讓開——理由見 {@link #runIsolated}。 */
     private final TransactionTemplate handlerTx;
+    /** 到期判斷用這個時鐘，跟 {@code OutboxEvent} 寫入時間戳用的是同一個。 */
+    private final Clock clock;
 
     public OutboxPoller(OutboxEventRepository outboxRepository,
             List<OutboxEventHandler> handlers,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            Clock clock) {
         this.outboxRepository = outboxRepository;
         this.handlers = handlers.stream()
                 .collect(Collectors.toMap(OutboxEventHandler::eventType, Function.identity()));
         this.handlerTx = new TransactionTemplate(transactionManager);
-        this.handlerTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.handlerTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+        this.clock = clock;
     }
 
     @Scheduled(fixedDelayString = "${svra.outbox.poll-interval-ms:2000}")
     @Transactional
     public void dispatch() {
-        List<OutboxEvent> batch = outboxRepository.lockNextBatch(BATCH_SIZE);
+        Instant now = Instant.now(clock);
+        List<OutboxEvent> batch = outboxRepository.lockNextBatch(BATCH_SIZE, now);
         if (batch.isEmpty()) {
             return;
         }
@@ -60,19 +67,19 @@ public class OutboxPoller {
                 if (handler == null) {
                     throw new IllegalStateException("沒有處理器對應事件型別：" + event.getEventType());
                 }
-                runIsolated(() -> handler.handle(event.getPayload()));
+                runOutsideOwnTransaction(() -> handler.handle(event.getPayload()));
 
-                event.markSent();
+                event.markSent(now);
             } catch (Exception e) {
                 log.warn("outbox 發送失敗：id={} type={} attempts={}",
                         event.getId(), event.getEventType(), event.getAttempts(), e);
-                event.markFailed(e.toString());
+                event.markFailed(e.toString(), now);
 
                 // 重試耗盡就不會再有人處理這個事件了，讓對應的處理器自己收尾——
                 // 該怎麼善後只有它知道（例如把 note 標成 FAILED）。
                 if (event.getStatus() == OutboxStatus.FAILED && handler != null) {
                     try {
-                        runIsolated(() -> handler.onGiveUp(event.getPayload()));
+                        runOutsideOwnTransaction(() -> handler.onGiveUp(event.getPayload()));
                     } catch (Exception cleanupFailure) {
                         log.error("放棄後的收尾也失敗：id={}", event.getId(), cleanupFailure);
                     }
@@ -83,19 +90,29 @@ public class OutboxPoller {
     }
 
     /**
-     * 把處理器跑在獨立的交易裡。
+     * 跑處理器時，把 poller 自己的交易<b>暫時讓開</b>（{@code NOT_SUPPORTED}）。
      *
-     * <p>🔴 少了這一層，重試機制是假的：處理器的 {@code @Transactional} 在例外往外
-     * 傳時會把交易標成 rollback-only，就算這裡把例外接住，外層 commit 時仍會拋
+     * <p>🔴 少了這一層，重試機制是假的：處理器底下的 {@code @Transactional} 在例外
+     * 往外傳時會把交易標成 rollback-only，就算這裡把例外接住，外層 commit 時仍會拋
      * {@code UnexpectedRollbackException}——連 {@code markFailed()} 累加的次數
-     * 都一起被回滾。實測就是 {@code attempts} 永遠停在 0、事件無限重試，
-     * 而且同一批的其他事件也跟著陪葬。
+     * 都一起被回滾。症狀是 {@code attempts} 永遠停在 0、事件無限重試，
+     * 而且同一批的其他事件也跟著陪葬。{@code OutboxPollerIntegrationTest} 守著這件事。
      *
-     * <p>代價是處理器的副作用會先於狀態更新提交：處理器成功、外層卻失敗時，
+     * <p><b>為什麼是「讓開」而不是「另外開一個」。</b>
+     * 這裡原本用 {@code REQUIRES_NEW}，隔離的效果一樣，但它順手<b>替處理器決定了
+     * 交易語意</b>——而處理器在做的是下載音檔、呼叫 LLM 這類外部 I/O。
+     * 一次抽取 12 秒起跳，那 12 秒全程佔著一條資料庫連線，什麼事也沒做。
+     * <b>基礎設施不該替業務決定要不要交易</b>，跟決策 7 把 switch 換成介面是同一件事。
+     *
+     * <p>讓開之後：需要交易的處理器靠自己的 {@code @Transactional} 開（此時沒有
+     * 外層交易，{@code REQUIRED} 就是開一個新的，隔離效果不變）；不需要的
+     * ——下載、發訊息、呼叫模型——就真的不在交易裡跑。
+     *
+     * <p>代價不變：處理器的副作用會先於狀態更新提交，處理器成功而外層失敗時
      * 事件仍是 PENDING 而會再跑一次。這是 outbox 本來就有的 at-least-once 性質
      * （見 README 決策 3），消費端要冪等。
      */
-    private void runIsolated(ThrowingRunnable action) throws Exception {
+    private void runOutsideOwnTransaction(ThrowingRunnable action) throws Exception {
         try {
             handlerTx.executeWithoutResult(status -> {
                 try {

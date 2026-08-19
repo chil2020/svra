@@ -64,7 +64,6 @@ public class NoteExtraction {
         item.attachTo(this);
     }
 
-    /** 舊版本停用。DB 有部分唯一索引擋著，同一則 note 不會有兩個生效版本。 */
     /** orphanRemoval = true，從集合移除就等於刪除該列。 */
     public void removeItem(NoteItem item) {
         items.remove(item);
@@ -74,6 +73,7 @@ public class NoteExtraction {
         this.notifyMessageId = lineMessageId;
     }
 
+    /** 舊版本停用。DB 有部分唯一索引擋著，同一則 note 不會有兩個生效版本。 */
     public void deactivate() {
         this.active = false;
     }

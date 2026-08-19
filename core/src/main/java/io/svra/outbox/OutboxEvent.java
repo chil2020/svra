@@ -44,6 +44,15 @@ public class OutboxEvent {
     @Column(name = "next_attempt_at", nullable = false)
     private Instant nextAttemptAt;
 
+    /**
+     * 「這件事只該做一次」的鍵，資料庫上有部分唯一索引（見 V5）。
+     *
+     * <p>可以是 null——不是每種事件都只該發生一次。填了就代表重複寫入會被資料庫擋下，
+     * 由呼叫端捕捉 {@code DataIntegrityViolationException} 當成「已經記過了」。
+     */
+    @Column(name = "dedupe_key", length = 160, updatable = false)
+    private String dedupeKey;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -53,23 +62,44 @@ public class OutboxEvent {
     protected OutboxEvent() {
     }
 
-    private OutboxEvent(String aggregateId, String eventType, String payload) {
+    private OutboxEvent(String aggregateId, String eventType, String payload, String dedupeKey) {
         this.aggregateId = aggregateId;
         this.eventType = eventType;
         this.payload = payload;
+        this.dedupeKey = dedupeKey;
         this.status = OutboxStatus.PENDING;
         this.attempts = 0;
         this.nextAttemptAt = Instant.now();
         this.createdAt = Instant.now();
     }
 
+    /**
+     * 可重複發生的事件（例如重跑抽取會再推播一次）。
+     *
+     * <p>{@code nextAttemptAt} 設成建立當下＝「立刻到期」。這是唯一還在實體裡
+     * 讀時鐘的地方，因為它表達的是「不用等」而不是一個要跟別人比對的時間點。
+     */
     public static OutboxEvent pending(String aggregateId, String eventType, String payload) {
-        return new OutboxEvent(aggregateId, eventType, payload);
+        return new OutboxEvent(aggregateId, eventType, payload, null);
     }
 
-    public void markSent() {
+    /**
+     * 只該發生一次的事件，其冪等鍵。
+     *
+     * <p>用在「來源是我們控制不了投遞次數的入站訊息」——LINE 的 webhook 是
+     * at-least-once，同一則訊息可能進來好幾次。內部產生的事件不需要：
+     * 它們寫在有自己守衛的交易裡（例如 note 的狀態轉移）。
+     *
+     * <p>帶鍵的寫入走 {@code OutboxEventRepository.insertIfAbsent}，不走這個實體——
+     * 讓 JPA 去撞唯一鍵會弄髒整個交易，理由寫在那個方法上。
+     */
+    public static String dedupeKeyFor(String eventType, String sourceMessageId) {
+        return eventType + ":" + sourceMessageId;
+    }
+
+    public void markSent(Instant now) {
         this.status = OutboxStatus.SENT;
-        this.sentAt = Instant.now();
+        this.sentAt = now;
         this.lastError = null;
     }
 
@@ -77,15 +107,19 @@ public class OutboxEvent {
      * 送失敗：累加次數並排下次重試（指數退避），超過上限就標 FAILED。
      *
      * <p>退避是必要的——RabbitMQ 掛掉時若每秒重試，只會在它恢復的瞬間被打爆。
+     *
+     * <p>時刻由呼叫端給，不在這裡讀時鐘：{@code next_attempt_at} 寫進去之後，
+     * 是要拿去跟 poller 查詢時的「現在」比大小的。<b>兩邊必須是同一個時鐘</b>，
+     * 而讓實體自己去讀，就沒有任何地方保證得了這件事。
      */
-    public void markFailed(String error) {
+    public void markFailed(String error, Instant now) {
         this.attempts++;
         this.lastError = error;
         if (this.attempts >= MAX_ATTEMPTS) {
             this.status = OutboxStatus.FAILED;
         } else {
             long backoffSec = (long) Math.pow(2, this.attempts);
-            this.nextAttemptAt = Instant.now().plusSeconds(backoffSec);
+            this.nextAttemptAt = now.plusSeconds(backoffSec);
         }
     }
 
@@ -127,5 +161,9 @@ public class OutboxEvent {
 
     public Instant getSentAt() {
         return sentAt;
+    }
+
+    public String getDedupeKey() {
+        return dedupeKey;
     }
 }

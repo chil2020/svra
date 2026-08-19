@@ -14,5 +14,6 @@ public record MqProperties(
         String jobRoutingKey,
         String jobDlq,
         String resultQueue,
-        String resultRoutingKey) {
+        String resultRoutingKey,
+        String resultDlq) {
 }

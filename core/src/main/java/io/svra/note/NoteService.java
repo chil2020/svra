@@ -1,8 +1,9 @@
 package io.svra.note;
 
+import java.util.Optional;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,19 +49,20 @@ public class NoteService {
      */
     @Transactional
     public boolean recordIncoming(String lineUserId, String sourceMessageId) {
-        try {
-            noteRepository.save(Note.pending(lineUserId, sourceMessageId));
-            outboxRepository.save(OutboxEvent.pending(
-                    sourceMessageId,
-                    EVENT_TRANSCRIBE_REQUESTED,
-                    toPayload(lineUserId, sourceMessageId)));
-            return true;
-        } catch (DataIntegrityViolationException e) {
-            // 只接這一個。用 catch (Exception) 的話，連線失敗會被當成「已處理過」
-            // 而回 200，LINE 就不再重送——訊息永久遺失且無人察覺。
+        if (noteRepository.insertPendingIfAbsent(lineUserId, sourceMessageId) == 0) {
             log.debug("重複訊息，已忽略：messageId={}", sourceMessageId);
             return false;
         }
+
+        // 走到這裡代表這個執行緒是唯一建立成功的那一個，所以 outbox 也不會撞號。
+        // 仍然填冪等鍵：讓「這個事件只該發生一次」寫在事件上，而不是要讀者
+        // 自己推論出 notes 有約束、所以 outbox 不會重複。
+        outboxRepository.insertIfAbsent(
+                sourceMessageId,
+                EVENT_TRANSCRIBE_REQUESTED,
+                toPayload(lineUserId, sourceMessageId),
+                OutboxEvent.dedupeKeyFor(EVENT_TRANSCRIBE_REQUESTED, sourceMessageId));
+        return true;
     }
 
     public String toPayload(String lineUserId, String sourceMessageId) {
@@ -110,20 +112,35 @@ public class NoteService {
     }
 
     /**
-     * outbox 徹底放棄時，讓 note 也有終局——否則它會永遠停在 PENDING，
+     * 轉錄徹底放棄時，讓 note 也有終局——否則它會永遠停在 PENDING，
      * 使用者傳了語音卻等不到任何結果，也沒有人知道它已經被放棄了。
      *
      * <p>
      * 失敗的原因不存在 note 上：{@code outbox_events.last_error} 已經有了，
      * 兩邊用 source_message_id 對得起來。
+     *
+     * <p>
+     * 放棄有<b>兩條路</b>：outbox 重試耗盡（任務根本沒送出去），
+     * 以及 worker 把任務丟進 DLQ（送出去了但做不完）。兩條都會走到這裡，
+     * 也可能先後抵達同一筆——所以只有真的從 PENDING 轉成 FAILED 的那一次
+     * 才回傳使用者，避免同一件事通知兩遍。
+     *
+     * @return 需要被通知的使用者 ID；已經有終局或找不到 note 時為空
      */
     @Transactional
-    public void markTranscriptionFailed(String sourceMessageId) {
-        noteRepository.findBySourceMessageId(sourceMessageId).ifPresentOrElse(
-                note -> {
-                    note.fail();
-                    log.warn("轉錄放棄，note 標記為 FAILED：messageId={}", sourceMessageId);
-                },
-                () -> log.error("要標記失敗但找不到 note：messageId={}", sourceMessageId));
+    public Optional<String> markTranscriptionFailed(String sourceMessageId) {
+        Note note = noteRepository.findBySourceMessageId(sourceMessageId).orElse(null);
+        if (note == null) {
+            log.error("要標記失敗但找不到 note：messageId={}", sourceMessageId);
+            return Optional.empty();
+        }
+        if (note.getStatus() != NoteStatus.PENDING) {
+            log.debug("note 已有終局狀態，不再標記失敗：messageId={} status={}",
+                    sourceMessageId, note.getStatus());
+            return Optional.empty();
+        }
+        note.fail();
+        log.warn("轉錄放棄，note 標記為 FAILED：messageId={}", sourceMessageId);
+        return Optional.of(note.getLineUserId());
     }
 }

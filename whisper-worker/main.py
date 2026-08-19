@@ -41,6 +41,12 @@ RESULT_ROUTING_KEY = os.getenv("RESULT_ROUTING_KEY", "transcribe.result")
 
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/data/audio")
 
+# 轉錄成功後刪掉音檔。逐字稿已經寫進資料庫，音檔留著只有壞處：
+# 目錄無上限成長，而且那是語音隱私資料——「不離開自己的機器」講的是不外傳，
+# 沒說要永久保存。設成 false 可以留著除錯。
+DELETE_AUDIO_AFTER_TRANSCRIBE = os.getenv("WHISPER_DELETE_AUDIO", "true").lower() == "true"
+
+
 # 聯發科的台灣調校版（Whisper large-v2 為底，已轉成 CTranslate2）。
 # 實測同一段音檔對照 small 與 large-v3：
 #   奮起湖  small ✖ 正啟湖  ／ large-v3 ✔ ／ Breeze ✔
@@ -85,8 +91,21 @@ def setup_topology(ch):
     ch.queue_declare(dlq, durable=True)
     ch.queue_bind(dlq, DLX, JOB_ROUTING_KEY)
 
-    ch.queue_declare(RESULT_QUEUE, durable=True)
+    # 結果佇列也掛死信。core 端宣告的參數必須跟這裡一字不差，
+    # 否則 channel 會 PRECONDITION_FAILED。
+    ch.queue_declare(
+        RESULT_QUEUE,
+        durable=True,
+        arguments={
+            "x-dead-letter-exchange": DLX,
+            "x-dead-letter-routing-key": RESULT_ROUTING_KEY,
+        },
+    )
     ch.queue_bind(RESULT_QUEUE, EXCHANGE, RESULT_ROUTING_KEY)
+
+    result_dlq = f"{RESULT_QUEUE}.dlq"
+    ch.queue_declare(result_dlq, durable=True)
+    ch.queue_bind(result_dlq, DLX, RESULT_ROUTING_KEY)
 
 
 def handle_job(ch, method, properties, body):
@@ -132,6 +151,14 @@ def handle_job(ch, method, properties, body):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         log.info("job=%s done in %.1fs (audio %.1fs, %d chars)",
                  job_id, result["elapsed_sec"], info.duration, len(text))
+
+        # ack 之後才刪：先刪的話，ack 失敗導致重送時就沒有音檔可以重轉了。
+        if DELETE_AUDIO_AFTER_TRANSCRIBE:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                # 刪不掉不該讓任務失敗——它已經做完了
+                log.warning("job=%s 音檔刪不掉：%s", job_id, audio_path)
     except Exception:
         log.exception("job=%s failed, sending to DLQ", job_id)
         ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
@@ -140,7 +167,21 @@ def handle_job(ch, method, properties, body):
 def main():
     while True:
         try:
-            conn = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+            # 🔴 heartbeat=0（關閉心跳），改靠 TCP keepalive 偵測斷線。
+            #
+            # BlockingConnection 只有在「回到事件迴圈」時才回應心跳，而
+            # handle_job() 會在 model.transcribe() 裡整段阻塞——Breeze-ASR-25
+            # 實測短音檔 33 秒還安全，但一則幾分鐘的語音留言就會超過預設協商的
+            # 60 秒 ×2。RabbitMQ 一斷線，做完之後的 basic_ack 就失敗，
+            # 任務回到佇列被重新轉錄——**越慢的任務越會被重跑，而重跑只會更慢**。
+            #
+            # 另一個做法是把轉錄丟到 thread、主迴圈週期性 process_data_events()。
+            # 那樣保得住心跳的偵測能力，但要處理跨執行緒 ack（add_callback_threadsafe）。
+            # 這裡的 worker 一次只做一件事、掛掉由 restart policy 接手，
+            # 用不到那個複雜度。
+            params = pika.URLParameters(RABBITMQ_URL)
+            params.heartbeat = 0
+            conn = pika.BlockingConnection(params)
             ch = conn.channel()
             setup_topology(ch)
             # 轉錄是重活：一次只取一件，讓多個 worker 能公平分工（水平擴展點）
