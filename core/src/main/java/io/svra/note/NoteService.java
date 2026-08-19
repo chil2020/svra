@@ -22,6 +22,12 @@ public class NoteService {
     public static final String EVENT_EXTRACT_REQUESTED = "EXTRACT_REQUESTED";
     public static final String EVENT_NOTIFY_REQUESTED = "NOTIFY_REQUESTED";
     public static final String EVENT_COMMAND_REQUESTED = "COMMAND_REQUESTED";
+    /**
+     * 「把這段文字推給使用者」。刻意不帶領域資訊——產生事件的模組決定要說什麼，
+     * notify 只負責送到。有了它，任何模組都能把「要回覆」寫進自己的交易裡，
+     * 而不必在交易中間打 LINE。
+     */
+    public static final String EVENT_PUSH_TEXT_REQUESTED = "PUSH_TEXT_REQUESTED";
 
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;

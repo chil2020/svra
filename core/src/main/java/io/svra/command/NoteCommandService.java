@@ -17,7 +17,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
-import io.svra.line.LinePushClient;
 import io.svra.llm.LlmRateLimiter;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
@@ -27,6 +26,7 @@ import io.svra.note.NoteItemRepository;
 import io.svra.note.NoteRepository;
 import io.svra.note.NoteService;
 import io.svra.notify.NoteNotifier;
+import io.svra.notify.PushTextPayload;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -41,7 +41,6 @@ public class NoteCommandService {
     private final NoteItemRepository itemRepository;
     private final CommandExecutionRepository executionRepository;
     private final NoteCommandParser parser;
-    private final LinePushClient pushClient;
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
     private final LlmRateLimiter rateLimiter;
@@ -60,7 +59,6 @@ public class NoteCommandService {
             CommandExecutionRepository executionRepository,
             Clock clock,
             NoteCommandParser parser,
-            LinePushClient pushClient,
             OutboxEventRepository outboxRepository,
             ObjectMapper objectMapper,
             LlmRateLimiter rateLimiter,
@@ -70,7 +68,6 @@ public class NoteCommandService {
         this.itemRepository = itemRepository;
         this.executionRepository = executionRepository;
         this.parser = parser;
-        this.pushClient = pushClient;
         this.outboxRepository = outboxRepository;
         this.objectMapper = objectMapper;
         this.rateLimiter = rateLimiter;
@@ -191,9 +188,26 @@ public class NoteCommandService {
             return;
         }
 
-        pushClient.pushText(payload.lineUserId(), execute(payload, prepared, command));
+        // 回覆與變更同交易寫下，提交後才由 outbox 送出（決策 3：先寫意圖，再送訊息）。
+        // 直接在這裡打 LINE 有兩個問題：HTTP 成功而交易回滾時，使用者會看到「已刪除」
+        // 但資料沒變（決策 17 那種「說了但沒做」）；而且那次外部 I/O 全程佔著這個交易。
+        //
+        // 這個事件不填 dedupe_key：它是內部產生的，寫在一個自己有守衛的交易裡
+        // （上面的執行紀錄），一則指令不可能寫出第二筆——理由見 OutboxEvent.dedupeKeyFor。
+        outboxRepository.save(OutboxEvent.pending(
+                payload.commandMessageId(),
+                NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                toPushPayload(payload.lineUserId(), execute(payload, prepared, command))));
         log.info("指令已處理：{} 個動作 messageId={}",
                 command.isUnknown() ? 0 : command.ops().size(), payload.commandMessageId());
+    }
+
+    private String toPushPayload(String lineUserId, String text) {
+        try {
+            return objectMapper.writeValueAsString(new PushTextPayload(lineUserId, text));
+        } catch (JacksonException e) {
+            throw new IllegalStateException("序列化推播 payload 失敗", e);
+        }
     }
 
     /** 真正動手的地方。回傳要給使用者的訊息。 */

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -17,9 +18,8 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
-import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
-import io.svra.line.LinePushClient;
 import io.svra.llm.LlmRateLimiter;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
@@ -27,6 +27,7 @@ import io.svra.note.NoteExtractionRepository;
 import io.svra.note.NoteItem;
 import io.svra.note.NoteItemRepository;
 import io.svra.note.NoteRepository;
+import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,9 +54,9 @@ class MultiOpCommandTest {
     @Mock NoteItemRepository itemRepository;
     @Mock CommandExecutionRepository executionRepository;
     @Mock NoteCommandParser parser;
-    @Mock LinePushClient pushClient;
     @Mock OutboxEventRepository outboxRepository;
-    @Mock ObjectMapper objectMapper;
+    /** 用真的 mapper：回覆現在寫進 outbox 的 payload，要驗內容就得序列化得出來。 */
+    private final JsonMapper objectMapper = JsonMapper.builder().build();
     @Mock LlmRateLimiter rateLimiter;
     @Mock PlatformTransactionManager transactionManager;
 
@@ -67,7 +68,7 @@ class MultiOpCommandTest {
         service = new NoteCommandService(noteRepository, extractionRepository, itemRepository,
                 executionRepository,
                 Clock.fixed(Instant.parse("2026-08-18T09:00:00Z"), ZoneId.of("Asia/Taipei")),
-                parser, pushClient, outboxRepository, objectMapper, rateLimiter,
+                parser, outboxRepository, objectMapper, rateLimiter,
                 transactionManager);
 
         extraction = NoteExtraction.of(1L, "raw", "v-test");
@@ -137,7 +138,7 @@ class MultiOpCommandTest {
         execute(delete(2));
 
         assertThat(extraction.getItems()).hasSize(3);
-        verify(pushClient).pushText(anyString(), org.mockito.ArgumentMatchers.contains("已經不在清單上"));
+        assertThat(replyPayload()).contains("已經不在清單上");
     }
 
     @Test
@@ -150,6 +151,14 @@ class MultiOpCommandTest {
         assertThat(extraction.getItems())
                 .as("重跑不可以再刪一次——那會刪到別筆")
                 .hasSize(3);
-        verify(pushClient, never()).pushText(anyString(), anyString());
+        verify(outboxRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    /** 這一輪寫進 outbox 的回覆內容。回覆改由 outbox 送出之後，驗的是它而不是 push。 */
+    private String replyPayload() {
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("PUSH_TEXT_REQUESTED");
+        return captor.getValue().getPayload();
     }
 }
