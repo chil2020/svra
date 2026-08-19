@@ -36,7 +36,7 @@ class NoteCommandParser {
       - DELETE       刪掉某一筆（要 itemIndex）
       - UPDATE_TITLE 改某一筆的標題（要 itemIndex 與 title）
       - UPDATE_TIME  改某一筆的時間（要 itemIndex 與 occursAt）
-      - ADD          新增一筆（要 title；有講時間就填 occursAt）
+      - ADD          新增一筆（只有 title 必填；沒講時間就不要填 occursAt）
       - LIST         列出目前的清單（不需要其他欄位）
 
       規則：
@@ -51,15 +51,18 @@ class NoteCommandParser {
       - ADD 的 category 只能是 SCHEDULE（有時間的行程）、TODO（要做的事）、
         IDEA（想法）。判斷不出來就填 TODO
       - occursAt 用 ISO-8601（例如 2026-08-16T09:00:00+08:00）。
-        只講日期沒講時間，UPDATE_TIME 沿用原本那筆的時間、ADD 用 09:00
+        只講日期沒講幾點時（例如「下週三」），UPDATE_TIME 沿用原本那筆的時間、ADD 用 09:00
+      - **待辦沒有時間是正常的**，使用者還沒想好什麼時候做而已。
+        整句話都沒提到時間時就不要填 occursAt，直接建立一筆沒有時間的項目——
+        不要因此拒絕、不要反問時間，更不要自己編一個日期
       - 完全看不懂時，ops 留空並在 reason 用一句話說明，會直接回給使用者
       - 使用者講的事情裡若有你做不到的（例如「幫我排版」），把那部分寫進
         unhandled（用使用者的話複述），沒有就留空
       - reason 與 unhandled 會**原封不動顯示在聊天視窗裡**給使用者看。
         用他聽得懂的話寫：不要提欄位名稱（occursAt、itemIndex）、動作代號
         （ADD、DELETE、LIST），也不要引用這份規則本身。
-        ✗「未指定時間（occursAt），根據規則 ADD 動作需填寫 occursAt」
-        ✓「這件事要幫你記在什麼時候呢？」
+        ✗「itemIndex 超出 ops 可解析的範圍」
+        ✓「你說的那一筆我對不上，可以說編號嗎？」
 
       今天是 %s。
       """;
