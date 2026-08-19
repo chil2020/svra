@@ -182,7 +182,7 @@ poller 送出訊息後、標記 SENT 前掛掉，重啟會再送一次。
 **多實例怎麼辦**：`SELECT ... FOR UPDATE SKIP LOCKED`——
 多個 poller 各自鎖住不同批次，不會重複處理同一筆。
 
-**踩過的坑：重試上限一度是假的。** poller 把處理器的例外接住、呼叫 `markFailed()`
+**踩過的坑：重試上限一度是假的。** poller 把事件處理器（`OutboxEventHandler` 的實作）的例外接住、呼叫 `markFailed()`
 累加次數，看起來很正常——但處理器的 `@Transactional` 在例外往外傳時已經把交易標成
 rollback-only，外層 commit 時拋 `UnexpectedRollbackException`，**連 `markFailed()`
 一起被回滾**。症狀是 `attempts` 永遠停在 0、事件無限重試、同一批的其他事件也陪葬。
