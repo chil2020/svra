@@ -7,20 +7,55 @@ README 的[快速開始](README.md#快速開始)是**第一次安裝**用的（�
 
 ## 一分鐘版
 
-九成的情況是：容器與常駐服務都還在，只有 core 沒跑。
+九成的情況是：容器與常駐服務都還在，只有 core 沒跑。而 **core 有兩種跑法，
+差別不是方便，是「會不會安靜地漏訊息」**：
 
 ```bash
 cd ~/專案/02-個人/SVRA
+
+# A. 平常用這個 —— core 也進容器，有 restart policy，關終端機／重開機都活著
+docker compose --profile full up -d
+
+# B. 改程式時用這個 —— 前景執行，改一行不用重建映像檔，但終端機關掉它就沒了
 ./run-core.sh
 ```
 
-這支會佔住終端機（前景執行，`Ctrl-C` 停止）。跑起來之後：
+確認——**兩種模式的查法不一樣**，因為容器版只把 8443 發布出來，
+8444 刻意留在容器內（決策 20：actuator 不對外）：
 
 ```bash
-curl -s localhost:8444/actuator/health   # 另開一個終端機
+# A 容器版
+docker compose ps core                    # 期望 Up ... (healthy)
+
+# B 本機版
+curl -s localhost:8444/actuator/health    # 期望 {"status":"UP"}
 ```
 
-看到 `"status":"UP"` 就好了。
+拿 B 的指令去查 A 會連不上，那**不代表 core 壞了**，只代表那個埠沒發布。
+
+> ⚠️ **兩個不能同時開**，都綁 8443。切換時先停掉另一邊：
+> `docker compose --profile full stop core` 或在 run-core.sh 的終端機按 `Ctrl-C`。
+>
+> **先確認現在是誰在服務**，再決定要停哪一邊：
+>
+> ```bash
+> lsof -nP -iTCP:8443 -sTCP:LISTEN
+> ```
+>
+> 看到 `java` 而 `docker compose ps` 沒有 core，就是本機版在跑。
+
+### 為什麼預設是 A 而不是 B
+
+這正是 [決策 15](README.md#15-全部服務進-compose但-ollama-留在宿主機) 的內容：
+core 用 `./run-core.sh` 跑在終端機裡時，**關掉視窗或重開機它就沒了——
+而其他四個服務都還活著**。`docker compose ps` 全綠、Ollama 在跑、ngrok 在跑，
+看起來一切正常，實際上**沒有人在接 webhook**。
+
+而 LINE 不會把那段時間的訊息補送。**那些語音就是永久遺失**，
+outbox 也救不回來——它能重試的前提是「事件已經寫進資料庫」，
+而那些訊息根本沒進到門口。
+
+B 只在你正在改 core 的程式碼時才划算。改完記得切回 A。
 
 ---
 
@@ -34,7 +69,7 @@ curl -s localhost:8444/actuator/health   # 另開一個終端機
 | whisper-worker | 容器 | 同上 | ✅ |
 | **Ollama** | **宿主機** | `brew services start ollama` | ✅ LaunchAgent |
 | **ngrok** | **宿主機** | `ngrok start svra` | ✅ LaunchAgent |
-| **core** | **宿主機** | `./run-core.sh` | ❌ **只有這個要手動** |
+| **core** | 容器 *或* 宿主機 | `docker compose --profile full up -d`<br>或 `./run-core.sh` | ⚠️ 看你用哪一種，見上面 |
 
 ### 為什麼有三個東西不在容器裡
 
@@ -65,14 +100,12 @@ curl -s localhost:8444/actuator/health   # 另開一個終端機
 ```bash
 cd ~/專案/02-個人/SVRA
 
-# 1. 容器（Ollama 與 ngrok 的 LaunchAgent 已經自己起來了）
-docker compose up -d
-
-# 2. core
-./run-core.sh
+# Ollama 與 ngrok 的 LaunchAgent 已經自己起來了，容器連 core 一起拉
+docker compose --profile full up -d
 ```
 
-就這樣。若 LaunchAgent 沒生效，手動補：
+一行就好——`--profile full` 是 `docker compose up -d` 的超集，
+連 core 一起帶起來。若 LaunchAgent 沒生效，手動補：
 
 ```bash
 brew services start ollama
@@ -95,7 +128,7 @@ ollama list
 # 3. ngrok：要看得到公開網址指向 localhost:8443
 curl -s localhost:4040/api/tunnels | python3 -m json.tool | grep public_url
 
-# 4. core：整體健康
+# 4. core：整體健康（本機版；容器版改用 docker compose ps core 看 healthy）
 curl -s localhost:8444/actuator/health
 
 # 5. 佇列：積壓與死信都該是 0
@@ -131,8 +164,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$url/webhook" \
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8443/actuator/health   # 期望 403
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8444/actuator/health   # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8444/actuator/health   # 本機版期望 200
 ```
+
+第二行只適用本機版。容器版的 8444 根本沒發布到宿主機，
+**連不上才是對的**——那是比「回 403」更徹底的隔離。
 
 ### 端到端
 
@@ -233,17 +269,30 @@ brew services start ollama
 
 ---
 
-## 另一種跑法：全部進容器
+## 開發時：把 core 換成本機跑
 
-部署或驗證用，core 也跑在容器裡：
+要改 core 的程式碼時，容器版每改一行都要重建映像檔，很痛。切成本機跑：
 
 ```bash
-docker compose --profile full up -d
+docker compose --profile full stop core   # 先讓出 8443
+./run-core.sh                             # 前景，Ctrl-C 停
 ```
 
-⚠️ **不能跟 `./run-core.sh` 同時開。** 兩邊都綁 8443：
-容器版沒停乾淨的話本機這支會啟動失敗；反過來本機那支沒關就 `--profile full`，
-**容器的埠會發布不出去而且不報錯**——後者比較難發現。
+改完切回去：
+
+```bash
+# 在 run-core.sh 的終端機按 Ctrl-C，然後
+docker compose --profile full up -d core
+```
+
+⚠️ **兩邊都綁 8443，不能同時開。** 而且兩種撞法的症狀不一樣：
+
+| 情況 | 症狀 |
+|---|---|
+| 容器版還開著，跑 `./run-core.sh` | 啟動失敗，明講埠被佔 —— 好查 |
+| 本機版還開著，跑 `--profile full` | **容器的埠發布不出去，而且不報錯** —— 難查 |
+
+第二種特別陰險：`docker compose ps` 會顯示 core 是 Up，但它其實收不到任何請求。
 
 ---
 
