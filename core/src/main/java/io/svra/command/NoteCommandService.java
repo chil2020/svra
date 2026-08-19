@@ -148,9 +148,11 @@ public class NoteCommandService {
      * 第一段的產出。只放值不放 entity——交易一結束它就 detached 了。
      *
      * @param quotedExtractionId 引用對到的那一批；沒引用或對不上時為 null
+     * @param quoteUnresolved    使用者引用了某則訊息，但它對不回任何生效的抽取
      * @param items              清單快照，順序即使用者看到的編號順序
      */
-    private record Prepared(Long quotedExtractionId, List<ItemSnapshot> items) {
+    private record Prepared(Long quotedExtractionId, boolean quoteUnresolved,
+            List<ItemSnapshot> items) {
     }
 
     /** @return 可以往下做時的資料；不該往下做時為 null */
@@ -165,11 +167,15 @@ public class NoteCommandService {
         // 有引用就鎖定那一批——編號跟那則推播上的一致。
         // 沒有引用時要看的是「目前還有什麼」，那會跨越多則語音，不是最後一則而已。
         NoteExtraction quoted = resolveQuoted(payload);
+        // 引用了卻對不上 = 使用者說的「第幾筆」跟我們手上的清單不是同一份。
+        // 還是用整體清單當解析的上下文（LIST／ADD 不指涉編號，照做無妨），
+        // 但指名項目的動作不能執行——編號會指到別的東西。
+        boolean quoteUnresolved = payload.quotedMessageId() != null && quoted == null;
         List<NoteItem> items = quoted != null
                 ? quoted.getOrderedItems()
                 : upcoming(payload.lineUserId());
 
-        return new Prepared(quoted == null ? null : quoted.getId(),
+        return new Prepared(quoted == null ? null : quoted.getId(), quoteUnresolved,
                 items.stream().map(ItemSnapshot::of).toList());
     }
 
@@ -235,10 +241,18 @@ public class NoteCommandService {
 
         StringBuilder reply = new StringBuilder();
         boolean listRequested = false;
+        boolean quoteBlocked = false;
 
         for (int i = 0; i < command.ops().size(); i++) {
             NoteCommand.Op op = command.ops().get(i);
             NoteItem target = targets.get(i);
+
+            // 引用對不上時，編號指的是整份清單，不是使用者眼前那則訊息。
+            // 照做的話會「確實地做錯事」——比報錯更糟。
+            if (needsTarget(op.action()) && prepared.quoteUnresolved()) {
+                quoteBlocked = true;
+                continue;
+            }
 
             // 指名的那一筆在這中間被刪掉了。說出來——沉默地跳過會讓使用者
             // 以為做到了（決策 17：只做一半的失敗處理比不做更難察覺）。
@@ -288,6 +302,12 @@ public class NoteCommandService {
             reply.append(NoteNotifier.renderCurrent(upcoming(payload.lineUserId())));
         }
 
+        if (quoteBlocked) {
+            reply.append("\n⚠️ 你引用的那則我對不上（可能已經被新版取代，或不是我推播的訊息）。")
+                    .append("那上面的編號跟我現在看到的清單不一定是同一份，所以我沒有動任何一筆。")
+                    .append("可以直接說內容，或引用最新那則。");
+        }
+
         // 只做了一半就要說——不然使用者會以為都交代了。
         if (command.unhandled() != null && !command.unhandled().isBlank()) {
             reply.append("\n⚠️ 這部分我還不會處理：").append(command.unhandled());
@@ -326,15 +346,29 @@ public class NoteCommandService {
                 || action == NoteCommand.Action.UPDATE_TIME;
     }
 
-    /** 使用者引用了某則推播時，精準定位到那一批；沒引用回 null。 */
+    /**
+     * 使用者引用了某則推播時，精準定位到那一批；沒引用、或那則對不回任何生效的抽取時回 null。
+     *
+     * <p>🔴 <b>失效的版本也算對不上。</b>只用 notify_message_id 反查而不看 is_active，
+     * 會對「已經被取代的那一批」執行——那些項目沒有任何介面看得到，使用者卻會收到
+     * 「已刪除」。成功訊息加零效果，比報錯更難察覺（決策 17）。
+     *
+     * <p>現在沒有任何程式會停用抽取版本（{@code deactivate()} 沒有呼叫者），
+     * 所以 active 那道過濾目前擋不到東西；它守的是「換模型重跑、兩版並存」（決策 9）
+     * 真的做出來的那一天。<b>會發生的是另一半</b>：使用者引用任何一則不是我們推播的訊息
+     * ——自己的舊訊息、V4 之前的推播——都會走到這裡。以前那條路是靜默改用整體清單，
+     * 然後拿使用者說的「第一筆」去對一份他沒看到的清單。
+     */
     private NoteExtraction resolveQuoted(CommandPayload payload) {
         if (payload.quotedMessageId() == null) {
             return null;
         }
         NoteExtraction quoted = extractionRepository
-                .findByNotifyMessageId(payload.quotedMessageId()).orElse(null);
+                .findByNotifyMessageId(payload.quotedMessageId())
+                .filter(NoteExtraction::isActive)
+                .orElse(null);
         if (quoted == null) {
-            log.debug("引用的訊息找不到對應抽取，改用整體清單：quoted={}", payload.quotedMessageId());
+            log.info("引用的訊息對不回任何生效的抽取：quoted={}", payload.quotedMessageId());
         }
         return quoted;
     }

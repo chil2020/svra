@@ -101,6 +101,12 @@ class MultiOpCommandTest {
         service.applyCommand(new NoteCommandService.CommandPayload(USER_ID, "m1", "指令", null));
     }
 
+    private void executeQuoting(String quotedMessageId, NoteCommand.Op... ops) {
+        when(parser.parse(anyString(), any())).thenReturn(new NoteCommand(List.of(ops), null, null));
+        service.applyCommand(new NoteCommandService.CommandPayload(
+                USER_ID, "m1", "指令", quotedMessageId));
+    }
+
     private static NoteCommand.Op delete(int index) {
         return new NoteCommand.Op(NoteCommand.Action.DELETE, index, null, null, null);
     }
@@ -152,6 +158,45 @@ class MultiOpCommandTest {
                 .as("重跑不可以再刪一次——那會刪到別筆")
                 .hasSize(3);
         verify(outboxRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    @DisplayName("引用的訊息對不回任何一批 → 指名項目的動作不執行，並說出來")
+    void refusesTargetedOpsWhenQuoteCannotBeResolved() {
+        when(extractionRepository.findByNotifyMessageId(anyString())).thenReturn(Optional.empty());
+
+        executeQuoting("unknown-message", delete(1));
+
+        assertThat(extraction.getItems())
+                .as("編號指的是整份清單，不是使用者眼前那則訊息——照做會確實地做錯事")
+                .hasSize(3);
+        assertThat(replyPayload()).contains("對不上");
+    }
+
+    @Test
+    @DisplayName("引用的是已失效的版本 → 一樣算對不上，不要對看不見的資料動手")
+    void treatsInactiveExtractionAsUnresolved() {
+        extraction.deactivate();
+        when(extractionRepository.findByNotifyMessageId(anyString()))
+                .thenReturn(Optional.of(extraction));
+
+        executeQuoting("stale-message", delete(1));
+
+        assertThat(extraction.getItems()).hasSize(3);
+        assertThat(replyPayload())
+                .as("對失效版本執行會回「已刪除」而使用者什麼也看不到——成功訊息加零效果")
+                .contains("對不上");
+    }
+
+    @Test
+    @DisplayName("引用對不上，但只是要看清單 → 照做。LIST 不指涉編號")
+    void stillAnswersListWhenQuoteCannotBeResolved() {
+        when(extractionRepository.findByNotifyMessageId(anyString())).thenReturn(Optional.empty());
+
+        executeQuoting("unknown-message",
+                new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null));
+
+        assertThat(replyPayload()).contains("目前還有這些");
     }
 
     /** 這一輪寫進 outbox 的回覆內容。回覆改由 outbox 送出之後，驗的是它而不是 push。 */
