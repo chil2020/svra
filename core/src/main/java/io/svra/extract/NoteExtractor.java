@@ -29,8 +29,15 @@ class NoteExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(NoteExtractor.class);
 
-    /** 改 prompt 就要改這個，才比較得出「是模型的差異還是 prompt 的差異」。 */
-    public static final String PROMPT_VERSION = "v6";
+    /**
+     * 改 prompt 就要改這個，才比較得出「是模型的差異還是 prompt 的差異」。
+     *
+     * <p>🔴 <b>「prompt」不只是下面那個字串。</b>{@code ExtractedNote} 產生的 JSON Schema
+     * 也會被送給模型，改了它同樣要升版本——v7 就是這樣來的：字串一個字沒動，
+     * 只把三個欄位標成選填。不升的話，{@code ExtractionCacheKeyGenerator} 算出來的鍵不變，
+     * 快取會餵回舊結果，而 eval 比出來的數字是假的。
+     */
+    public static final String PROMPT_VERSION = "v7";
 
     private static final int MAX_ATTEMPTS = 2;
 
