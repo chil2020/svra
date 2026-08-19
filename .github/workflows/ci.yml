@@ -39,6 +39,10 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      # 整合測試會用 Testcontainers 起 PostgreSQL，GitHub 的 ubuntu runner 內建 Docker。
+      # 這一步同時補上決策 8 的破口：ddl-auto=validate 只在「應用真的啟動」時才驗
+      # entity 與 migration 是否一致，而在有這些測試之前，CI 從來沒有啟動過應用——
+      # migration 跟 entity 漂掉了要等本機跑起來才會發現。
       - name: Build core
         run: mvn -B -ntp package --file core/pom.xml
 
@@ -53,5 +57,12 @@ jobs:
           cache-dependency-path: whisper-worker/requirements.txt
       - name: Install deps
         run: pip install -r whisper-worker/requirements.txt
+      # -x 排掉 .venv：那是宿主機跑 MLX 用的虛擬環境（見 eval/README.md），
+      # 不進版控，但本機跑這行時會掃到它，而裡面的套件不保證能被當前的
+      # Python 版本編譯。CI 上沒有它，加這個參數是為了讓本機跑同一行也會過。
       - name: Compile check
-        run: python -m compileall whisper-worker
+        run: python -m compileall -q -x '\.venv' whisper-worker
+      # eval 的量尺自己要先是對的。它算錯的話產出的是「有自信的錯誤數字」，
+      # 而那比沒有數字更危險——沒有人會去質疑一個看起來很篤定的表格。
+      - name: Eval instrument self-test
+        run: python whisper-worker/scripts/test_eval_asr.py

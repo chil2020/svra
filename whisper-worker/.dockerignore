@@ -1,0 +1,5 @@
+# 宿主機專用的 MLX 環境（582 MB）。它只跑得動 Apple Silicon 的 Metal，
+# 容器裡沒有用；而 Dockerfile 是 COPY . .，不排掉會整包進建置脈絡。
+.venv/
+__pycache__/
+*.pyc
