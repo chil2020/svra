@@ -36,10 +36,22 @@ regexes = [
 ]
 
 # ── 測試用的簽章 fixture ──────────────────────────────────────────────
-# LineWebhookControllerTest 的 VALID_SIGNATURE 是用測試用的假 channel secret
-# 算出來的 HMAC 預期值，不是任何線上系統的憑證。
+# 驗簽測試裡的預期值是 HMAC-SHA256 的**輸出**，不是憑證：
+#
+#   printf '%s' '{"events":[]}' | openssl dgst -sha256 -hmac 'test-secret' -binary | base64
+#
+# 金鑰（test-secret）與輸入（{"events":[]}）都明寫在同一個檔案裡，
+# 任何人都能重算，它不通往任何東西。這是密碼學實作的標準測法（known-answer test）——
+# 期望值由外部工具算出，才不會變成拿自己驗自己。
+#
+# ⚠️ 這條白名單一度指向 core/src/test/java/io/svra/**line**/LineWebhookControllerTest.java，
+# 而那個檔案早就搬到 webhook/、簽章 fixture 也搬到 security/。也就是說它已經失效了一段時間，
+# 而掃描之所以沒響，是因為 gitleaks 的預設規則需要關鍵字前後文才會抓 44 字元的 base64——
+# **是規則沒抓到，不是白名單放行**。白名單的路徑會隨重構失效而且不會有人通知，
+# 所以這裡改成鎖檔名而不是完整路徑。
 [[allowlists]]
-description = "webhook 驗簽測試的預期值"
+description = "驗簽測試的 HMAC 預期值（known-answer test 的輸出，非憑證）"
 paths = [
-  '''core/src/test/java/io/svra/line/LineWebhookControllerTest\.java''',
+  '''core/src/test/java/io/svra/security/LineSignatureTest\.java''',
+  '''core/src/test/java/io/svra/security/WebhookSecurityTest\.java''',
 ]

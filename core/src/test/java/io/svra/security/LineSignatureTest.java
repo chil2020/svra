@@ -10,6 +10,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 期望值由 {@code openssl dgst -sha256 -hmac 'test-secret' -binary | base64} 算出，
  * 不是用這支程式自己算的——否則等於拿自己驗自己，演算法或編碼寫錯也照樣全綠。
+ * 這是密碼學實作的標準測法：known-answer test，答案得來自外部。
+ *
+ * <p>⚠️ <b>下面那串 Base64 不是憑證，是上面那道指令的輸出。</b>
+ * 金鑰（{@code test-secret}）與輸入（<code>{"events":[]}</code>）都在同一個檔案裡，
+ * 任何人都能重算，它不通往任何東西。
+ *
+ * <p>但它是一串 44 字元的高熵 Base64，<b>看起來就跟憑證一模一樣</b>——
+ * GitGuardian 掃 PR 時確實報過一次。這是 KAT 無法避免的性質：
+ * 雜湊的輸出本來就長這樣。處理方式是明講而不是改寫測試——
+ * 為了讓掃描器安靜而削弱一個安全測試，方向完全相反。
+ * 消音設定在 {@code .gitguardian.yaml} 與 {@code .gitleaks.toml}。
  */
 class LineSignatureTest {
 
