@@ -11,7 +11,10 @@ import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
+
+import io.svra.llm.LlmCacheConfig;
 import io.svra.note.NoteItem;
 import io.svra.note.NoteCategory;
 
@@ -61,12 +64,24 @@ class NoteExtractor {
     }
 
     /**
+     * 呼叫模型抽取。
+     *
+     * <p>結果進 Redis 快取（key 見 {@code ExtractionCacheKeyGenerator}）。
+     * 地端模型沒有金錢成本，但一次抽取 12 秒起跳，而<b>同樣的輸入會一再進來</b>：
+     * eval 每次跑同一批案例、重跑舊資料、prompt 沒改而只是重啟。
+     *
+     * <p>失敗時回 {@code null} 而不是空清單，是為了<b>不讓失敗進快取</b>
+     * （{@code disableCachingNullValues}）——把一次連線失敗記住 24 小時，
+     * 比不快取糟得多。
+     *
      * @param transcript 語音轉錄的逐字稿
      * @param recordedAt 錄音當下的時刻。「明天」「下週二」以它為基準，而不是現在——
      *                   平常兩者差幾秒沒影響，但重跑舊資料或佇列積壓時會整個錯開。
-     * @return 抽取出來的項目；完全抽不出東西時回傳空清單
+     * @return 抽取結果；連續驗證失敗時為 null
      */
-    public List<NoteItem> extract(String transcript, Instant recordedAt) {
+    @Cacheable(cacheNames = LlmCacheConfig.EXTRACTION_CACHE,
+            keyGenerator = "extractionCacheKeyGenerator")
+    public ExtractedNote extract(String transcript, Instant recordedAt) {
 
         // 直接給日曆，而不是要模型自己算。實測光給「今天是星期五」還不夠——
         // 它得再推算「8/17 是星期幾」，而那一步會錯。
@@ -81,17 +96,23 @@ class NoteExtractor {
                     .call()
                     .entity(ExtractedNote.class);
 
-            List<String> errors = validate(result);
+            List<String> errors = validate(result, recordedAt);
             if (errors.isEmpty()) {
-                return result.items().stream().map(NoteExtractor::toEntity).toList();
+                return result;
             }
             errorFeedback = String.join("\n", errors);
             log.warn("抽取驗證失敗（第 {} 次）：{}", attempt, errorFeedback);
         }
 
         log.error("抽取連續 {} 次驗證失敗，放棄", MAX_ATTEMPTS);
-        return List.of();
+        return null;
+    }
 
+    /** 把模型回的 DTO 轉成領域物件。抽不出東西（或抽取失敗）時是空清單。 */
+    public static List<NoteItem> toItems(ExtractedNote result) {
+        return result == null || result.items() == null
+                ? List.of()
+                : result.items().stream().map(NoteExtractor::toEntity).toList();
     }
 
     /** 今天起 14 天的日期與星期，讓模型查表而不是心算。 */
@@ -115,18 +136,24 @@ class NoteExtractor {
      * 領域驗證。schema 只保證格式，這裡檢查的是「內容合不合理」——
      * 模型可以回傳完全合法的 JSON，但把 2026 年的行程寫成 2025 年。
      *
+     * <p>合理範圍以 {@code recordedAt} 為基準，不是 {@code Instant.now()}。
+     * 理由同 {@code ClockConfig} 的說明：相對日期是<b>資料本身的屬性</b>，
+     * 不是執行到這一行時的環境時刻。用 now() 的話，重跑一年前的舊資料
+     * 會把當時完全正確的日期判成「超出合理範圍」，然後無謂地重試兩次再放棄。
+     * 順帶讓這個方法可以用固定時間測。
+     *
+     * @param recordedAt 錄音當下的時刻
      * @return 錯誤訊息；全部通過時回傳空清單
      */
-    static List<String> validate(ExtractedNote result) {
+    static List<String> validate(ExtractedNote result, Instant recordedAt) {
         List<String> errors = new ArrayList<>();
         if (result == null || result.items() == null) {
             errors.add("沒有回傳 items");
             return errors;
         }
 
-        Instant now = Instant.now();
-        Instant lowerBound = now.minusSeconds(365L * 24 * 3600);
-        Instant upperBound = now.plusSeconds(2 * 365L * 24 * 3600);
+        Instant lowerBound = recordedAt.minusSeconds(365L * 24 * 3600);
+        Instant upperBound = recordedAt.plusSeconds(2 * 365L * 24 * 3600);
 
         for (int i = 0; i < result.items().size(); i++) {
             ExtractedNote.Item item = result.items().get(i);
@@ -144,7 +171,7 @@ class NoteExtractor {
                     Instant t = Instant.parse(item.occursAt());
                     if (t.isBefore(lowerBound) || t.isAfter(upperBound)) {
                         errors.add(at + ".occursAt=" + item.occursAt()
-                                + " 超出合理範圍（今天前後一到兩年），年份可能推斷錯誤");
+                                + " 超出合理範圍（錄音當下前後一到兩年），年份可能推斷錯誤");
                     }
                 } catch (Exception e) {
                     errors.add(at + ".occursAt=" + item.occursAt()

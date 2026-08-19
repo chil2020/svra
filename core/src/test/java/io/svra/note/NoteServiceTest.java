@@ -7,7 +7,6 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.Spy;
-import org.springframework.dao.DataIntegrityViolationException;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -17,17 +16,24 @@ import io.svra.outbox.OutboxEventRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 用 mock 讓 repository 拋出唯一鍵衝突，驗證的是「衝突時程式怎麼反應」。
- * 「資料庫真的會擋下第二筆」靠 V1__init.sql 的 UNIQUE 約束 + ddl-auto=validate。
- * 更完整的做法是 Testcontainers 跑整合測試，目前沒做（相依與 CI 時間的取捨）。
+ * 用 mock 驗的是「repository 說已經有了的時候，這一層怎麼反應」。
+ *
+ * <p>⚠️ <b>這一組測試守不住冪等。</b>它曾經讓 mock 拋出
+ * {@code DataIntegrityViolationException} 並斷言「有 catch 住」，全綠了好幾個月——
+ * 而真實情況是唯一鍵衝突會把交易標成 rollback-only，catch 住也沒用，
+ * commit 時照樣拋 {@code UnexpectedRollbackException} 給 webhook。
+ * <b>mock 只證明得了呼叫端會處理某個例外，證明不了那個例外底下發生了什麼。</b>
+ *
+ * <p>真正在守這件事的是 {@code IdempotencyIntegrationTest}（跑真的 PostgreSQL）。
  */
 @ExtendWith(MockitoExtension.class)
 class NoteServiceTest {
@@ -49,21 +55,19 @@ class NoteServiceTest {
     private NoteService noteService;
 
     @Test
-    @DisplayName("第一次收到 → 建立 note，回傳 true")
+    @DisplayName("第一次收到 → 回傳 true")
     void firstDeliveryCreatesNote() {
-        when(noteRepository.save(any(Note.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(noteRepository.insertPendingIfAbsent(USER_ID, MESSAGE_ID)).thenReturn(1);
 
         boolean created = noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
         assertThat(created).isTrue();
-        verify(noteRepository, times(1)).save(any(Note.class));
     }
 
     @Test
-    @DisplayName("重複投遞 → 唯一鍵衝突，回傳 false")
+    @DisplayName("重複投遞 → insert 被資料庫吞掉（回 0），回傳 false")
     void duplicateDeliveryReturnsFalse() {
-        when(noteRepository.save(any(Note.class)))
-                .thenThrow(new DataIntegrityViolationException("uk_notes_source_message_id"));
+        when(noteRepository.insertPendingIfAbsent(USER_ID, MESSAGE_ID)).thenReturn(0);
 
         boolean created = noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
@@ -73,49 +77,34 @@ class NoteServiceTest {
     @Test
     @DisplayName("重複投遞不可以把例外往外拋——拋出去會讓 webhook 回 500，LINE 就會再重送")
     void duplicateDeliveryDoesNotPropagateException() {
-        when(noteRepository.save(any(Note.class)))
-                .thenThrow(new DataIntegrityViolationException("uk_notes_source_message_id"));
+        when(noteRepository.insertPendingIfAbsent(USER_ID, MESSAGE_ID)).thenReturn(0);
 
         assertThatCode(() -> noteService.recordIncoming(USER_ID, MESSAGE_ID))
                 .doesNotThrowAnyException();
     }
 
     @Test
-    @DisplayName("建立的 note 狀態是 PENDING，且帶著正確的 message id")
-    void createdNoteIsPendingWithSourceMessageId() {
-        when(noteRepository.save(any(Note.class))).thenAnswer(inv -> {
-            Note saved = inv.getArgument(0);
-            assertThat(saved.getSourceMessageId()).isEqualTo(MESSAGE_ID);
-            assertThat(saved.getLineUserId()).isEqualTo(USER_ID);
-            assertThat(saved.getStatus()).isEqualTo(NoteStatus.PENDING);
-            return saved;
-        });
-
-        noteService.recordIncoming(USER_ID, MESSAGE_ID);
-
-        verify(noteRepository).save(any(Note.class));
-    }
-
-    @Test
-    @DisplayName("第一次收到時，同一個交易裡也要寫下 outbox 事件")
+    @DisplayName("第一次收到時，同一個交易裡也要寫下 outbox 事件，且帶著冪等鍵")
     void firstDeliveryAlsoWritesOutbox() {
-        when(noteRepository.save(any(Note.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(outboxRepository.save(any(OutboxEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(noteRepository.insertPendingIfAbsent(USER_ID, MESSAGE_ID)).thenReturn(1);
 
         noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
-        verify(outboxRepository).save(any(OutboxEvent.class));
+        verify(outboxRepository).insertIfAbsent(
+                eq(MESSAGE_ID),
+                eq(NoteService.EVENT_TRANSCRIBE_REQUESTED),
+                contains(MESSAGE_ID),
+                eq(OutboxEvent.dedupeKeyFor(NoteService.EVENT_TRANSCRIBE_REQUESTED, MESSAGE_ID)));
     }
 
     @Test
     @DisplayName("重複投遞時不可以再寫 outbox，否則會重複發任務")
     void duplicateDeliveryDoesNotWriteOutbox() {
-        when(noteRepository.save(any(Note.class)))
-                .thenThrow(new DataIntegrityViolationException("uk_notes_source_message_id"));
+        when(noteRepository.insertPendingIfAbsent(USER_ID, MESSAGE_ID)).thenReturn(0);
 
         noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
-        verify(outboxRepository, never()).save(any(OutboxEvent.class));
+        verify(outboxRepository, never()).insertIfAbsent(any(), any(), any(), any());
     }
 
     // ── U7：套用轉錄結果 ──────────────────────────────────────────

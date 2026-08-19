@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -36,6 +37,12 @@ import io.svra.note.NoteItem;
  */
 @Tag("eval")
 @SpringBootTest
+@TestPropertySource(properties = {
+        // LineProperties 現在是 @NotBlank，少了會啟動失敗（決策 22）。
+        // eval 只呼叫 LLM，不碰 LINE，給值只是為了讓 context 起得來。
+        "svra.line.channel-secret=eval-secret",
+        "svra.line.channel-access-token=eval-token",
+})
 class ExtractionEvalTest {
 
         private static final Path CASES = Path.of("..", "eval", "cases.jsonl");
@@ -71,9 +78,9 @@ class ExtractionEvalTest {
             try {
                 // 案例的 today 就是「錄音當下」，直接傳進去——
                 // 不需要動時鐘，因為基準日已經是參數而不是環境。
-                actual = extractor.extract(c.get("input").asString(),
+                actual = NoteExtractor.toItems(extractor.extract(c.get("input").asString(),
                         LocalDate.parse(c.get("today").asString())
-                                .atStartOfDay(ZONE).toInstant());
+                                .atStartOfDay(ZONE).toInstant()));
             } catch (Exception e) {
                 System.out.printf("%-12s ✖ 例外：%s%n", id, e.getMessage());
                 board.record(id, List.of("抽取拋出例外"));

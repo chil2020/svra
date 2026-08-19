@@ -51,9 +51,12 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-phate334/Breeze-ASR-25-ct2}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      # 轉錄成功後刪音檔：逐字稿已進資料庫，留著只會讓語音資料無上限堆積
+      WHISPER_DELETE_AUDIO: ${WHISPER_DELETE_AUDIO:-true}
     volumes:
       - ./data/audio:/data/audio          # core 與 worker 交換音檔的共享目錄
       - whisper-models:/root/.cache/huggingface # 模型權重快取，避免每次重載
+      - ./eval:/eval:ro                   # ASR eval 的案例檔（唯讀，worker 不該寫它）
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -74,9 +77,12 @@ services:
       RABBITMQ_HOST: rabbitmq
       REDIS_HOST: redis
       AUDIO_DIR: /data/audio
+      MANAGEMENT_PORT: 8444
       # Ollama 跑在宿主機不是容器裡（模型權重大、要用 Metal 加速）
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     ports:
+      # 只發布 webhook 的埠。actuator 在 8444，刻意不對外——
+      # 要看指標就 docker compose exec 進去，或另外接監控網路。
       - "8443:8443"
     volumes:
       - ./data/audio:/data/audio          # 與 whisper-worker 交換音檔
@@ -90,7 +96,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:8443/actuator/health"]
+      test: ["CMD", "curl", "-fs", "http://localhost:8444/actuator/health"]
       interval: 10s
       timeout: 5s
       retries: 12

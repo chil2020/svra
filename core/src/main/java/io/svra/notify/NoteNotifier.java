@@ -71,13 +71,34 @@ public class NoteNotifier {
         extraction.recordNotified(messageId);
     }
 
-    /** 供推播與「列出行程」共用——兩邊必須是同一份編號。 */
+    /** 抽取完成後推播用。 */
     public static String render(List<NoteItem> items) {
+        return render(items, "📝 已整理好你的語音筆記", "\n引用這則訊息即可修改或刪除");
+    }
+
+    /**
+     * 使用者問「現在有什麼行程」時的回覆。
+     *
+     * <p>抬頭要跟推播不一樣——共用同一句「已整理好你的語音筆記」的話，
+     * 使用者問的是現況、收到的卻像是剛處理完一則語音，答非所問。
+     *
+     * <p>結尾也不同：推播那則的 messageId 會存進 {@code notify_message_id}，
+     * 引用它能精準對回那一批；這則沒有存，引用時是退回「目前全部項目」。
+     * 兩者的編號目前一致（都走 {@code NoteCategory.itemOrder()}），
+     * 但那是<b>當下</b>一致——中間刪過東西編號就會漂。
+     * 所以這裡不承諾「引用這則」，只說怎麼下一句指令。
+     */
+    public static String renderCurrent(List<NoteItem> items) {
+        return render(items, "📋 目前還有這些", "\n直接回覆就可以修改或刪除");
+    }
+
+    /** 供推播與「列出行程」共用——兩邊必須是同一份編號。 */
+    private static String render(List<NoteItem> items, String heading, String footer) {
         Map<NoteCategory, List<NoteItem>> byCategory = items.stream()
                 .sorted(NoteCategory.itemOrder())
                 .collect(Collectors.groupingBy(NoteItem::getCategory));
 
-        StringBuilder sb = new StringBuilder("📝 已整理好你的語音筆記\n");
+        StringBuilder sb = new StringBuilder(heading).append('\n');
         int index = 0;
         for (NoteCategory category : NoteCategory.DISPLAY_ORDER) {
             List<NoteItem> group = byCategory.get(category);
@@ -95,6 +116,6 @@ public class NoteNotifier {
                 sb.append(item.getTitle()).append('\n');
             }
         }
-        return sb.append("\n引用這則訊息即可修改或刪除").toString();
+        return sb.append(footer).toString();
     }
 }

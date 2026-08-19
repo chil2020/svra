@@ -18,15 +18,28 @@ public record LineWebhookPayload(List<Event> events) {
 
         /** 文字訊息＝使用者在下指令（刪除、修改行程等）。 */
         public boolean isTextMessage() {
-            return "message".equals(type)
-                    && message != null
-                    && "text".equals(message.type());
+            return isMessageOfType("text");
         }
 
         public boolean isAudioMessage() {
+            return isMessageOfType("audio");
+        }
+
+        /**
+         * 這裡<b>也要檢查 source</b>。整份 payload 的每一層都做了 ignoreUnknown，
+         * 就是為了「LINE 加欄位不會讓我們回 500 → 被無限重送」——而
+         * {@code source.userId()} 一度是直接取值的，群組來源或非使用者事件
+         * 拿不到 userId 時就是一個 NPE，剛好破了那個例。
+         *
+         * <p>回錯的東西只會讓 LINE 再送一次（決策 1），所以「收得下但不處理」
+         * 一定要好過「處理不了就爆掉」。
+         */
+        private boolean isMessageOfType(String messageType) {
             return "message".equals(type)
                     && message != null
-                    && "audio".equals(message.type());
+                    && messageType.equals(message.type())
+                    && source != null
+                    && source.userId() != null;
         }
     }
 

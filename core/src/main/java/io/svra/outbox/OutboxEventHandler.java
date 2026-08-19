@@ -12,13 +12,15 @@ public interface OutboxEventHandler {
     String eventType();
 
     /**
-     * @param payload 事件的 JSON 內容，由實作者自己決定怎麼解讀——
-     *                不同事件的 payload 形狀本來就不同
-     */
-    /**
      * 允許丟出受檢例外：處理器都在做 I/O（下載、發訊息、呼叫 LLM），
      * 而 poller 的契約本來就是「攔下所有失敗，記錄後退避重試」——
      * 逼每個實作自己包一層 try/catch 只會讓失敗被吞掉。
+     *
+     * <p>呼叫時<b>沒有</b>外層交易（poller 會把自己的讓開），需要交易的實作
+     * 自己標 {@code @Transactional}。
+     *
+     * @param payload 事件的 JSON 內容，由實作者自己決定怎麼解讀——
+     *                不同事件的 payload 形狀本來就不同
      */
     void handle(String payload) throws Exception;
 

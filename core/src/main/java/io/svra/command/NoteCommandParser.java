@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -23,9 +24,9 @@ import io.svra.note.NoteCategory;
 @Component
 class NoteCommandParser {
 
-  private static final Logger log = LoggerFactory.getLogger(NoteCommandParser.class);
+    private static final Logger log = LoggerFactory.getLogger(NoteCommandParser.class);
 
-  private static final String SYSTEM = """
+    private static final String SYSTEM = """
       你要把使用者對一份筆記清單下的指令，解析成一串結構化動作。
 
       目前的清單（編號就是使用者說的「第幾筆」）：
@@ -58,103 +59,133 @@ class NoteCommandParser {
       今天是 %s。
       """;
 
-  private final ChatClient chatClient;
-  private final Clock clock;
-  private final ZoneId zone = ZoneId.of("Asia/Taipei");
+    private final ChatClient chatClient;
+    private final Clock clock;
+    private final ZoneId zone = ZoneId.of("Asia/Taipei");
 
-  /** 時鐘用注入的而不是 LocalDate.now()，「下週二」才驗算得了。 */
-  NoteCommandParser(ChatClient.Builder builder, Clock clock) {
-    this.chatClient = builder.build();
-    this.clock = clock;
-  }
-
-  /**
-   * @param userText 使用者說的話
-   * @param items    目前生效的項目，順序即編號順序
-   */
-  public NoteCommand parse(String userText, List<NoteItem> items) {
-
-    String system = SYSTEM.formatted(renderItems(items), LocalDate.now(clock.withZone(zone)));
-
-    try {
-      NoteCommand result = chatClient.prompt()
-          .system(system)
-          .user(userText)
-          .call()
-          .entity(NoteCommand.class);
-
-      if (result.isUnknown()) {
-        return result.reason() == null
-            ? NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？")
-            : result;
-      }
-
-      // 一個動作不合法就整批退回。只做一半又不說，比什麼都不做更糟。
-      for (NoteCommand.Op op : result.ops()) {
-        String invalid = validate(op, items.size());
-        if (invalid != null) {
-          log.warn("指令驗證失敗：{}（{}）", userText, invalid);
-          return NoteCommand.unknown(invalid);
-        }
-      }
-      return result;
-
-    } catch (Exception e) {
-      log.warn("指令解析失敗：{}", userText, e);
-      return NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？");
+    /** 時鐘用注入的而不是 LocalDate.now()，「下週二」才驗算得了。 */
+    NoteCommandParser(ChatClient.Builder builder, Clock clock) {
+        this.chatClient = builder.build();
+        this.clock = clock;
     }
-  }
 
-  /** 把項目清單排成 LLM 讀得懂的樣子，編號與推播訊息一致。 */
-  static String renderItems(List<NoteItem> items) {
-    return IntStream.range(0, items.size())
-        .mapToObj(i -> {
-          NoteItem item = items.get(i);
-          String when = item.getOccursAt() == null ? "無" : item.getOccursAt().toString();
-          return "%d. [%s] %s（時間：%s）"
-              .formatted(i + 1, item.getCategory(), item.getTitle(), when);
-        })
-        .reduce((a, b) -> a + "\n" + b)
-        .orElse("（清單是空的）");
-  }
+    /**
+     * @param userText 使用者說的話
+     * @param items    目前生效的項目，順序即編號順序
+     */
+    public NoteCommand parse(String userText, List<NoteItem> items) {
 
-  /** @return 不合法的原因；合法時為 null */
-  private static String validate(NoteCommand.Op op, int itemCount) {
-    return switch (op.action()) {
-      case DELETE, UPDATE_TITLE, UPDATE_TIME -> {
-        Integer index = op.itemIndex();
-        if (index == null || index < 1 || index > itemCount) {
-          yield "找不到你說的那一筆，可以說編號嗎？";
-        }
-        if (op.action() == NoteCommand.Action.UPDATE_TITLE
-            && (op.title() == null || op.title().isBlank())) {
-          yield "要改成什麼標題呢？";
-        }
-        if (op.action() == NoteCommand.Action.UPDATE_TIME && op.occursAt() == null) {
-          yield "要改成什麼時間呢？";
-        }
-        yield null;
-      }
-      // ADD 與 LIST 不看 itemIndex——模型有時會順手填一個（實測填過 -1）。
-      // 那個值不會被使用，不需要因此讓整批指令失敗。
-      case ADD -> (op.title() == null || op.title().isBlank()) ? "要新增什麼呢？" : null;
-      case LIST -> null;
-    };
-  }
+        String system = SYSTEM.formatted(renderItems(items), LocalDate.now(clock.withZone(zone)));
 
-  /** 判斷不出來就當待辦——寧可分類錯，也不要因為分類而整批失敗。 */
-  static NoteCategory parseCategory(String raw) {
-    if (raw == null || raw.isBlank()) {
-      return NoteCategory.TODO;
+        try {
+            NoteCommand result = chatClient.prompt()
+                    .system(system)
+                    .user(userText)
+                    .call()
+                    .entity(NoteCommand.class);
+
+            if (result.isUnknown()) {
+                return result.reason() == null
+                        ? NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？")
+                        : result;
+            }
+
+            // 一個動作不合法就整批退回。只做一半又不說，比什麼都不做更糟。
+            for (NoteCommand.Op op : result.ops()) {
+                String invalid = validate(op, items.size());
+                if (invalid != null) {
+                    log.warn("指令驗證失敗：{}（{}）", userText, invalid);
+                    return NoteCommand.unknown(invalid);
+                }
+            }
+            return result;
+
+        } catch (Exception e) {
+            log.warn("指令解析失敗：{}", userText, e);
+            return NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？");
+        }
     }
-    try {
-      return NoteCategory.valueOf(raw.trim().toUpperCase());
-    } catch (IllegalArgumentException e) {
-      return NoteCategory.TODO;
-    }
-  }
 
-  static Instant parseOccursAt(String iso) {
-    return (iso == null || iso.isBlank()) ? null : Instant.parse(iso);
-  }
+    /** 把項目清單排成 LLM 讀得懂的樣子，編號與推播訊息一致。 */
+    static String renderItems(List<NoteItem> items) {
+        return IntStream.range(0, items.size())
+                .mapToObj(i -> {
+                    NoteItem item = items.get(i);
+                    String when = item.getOccursAt() == null ? "無" : item.getOccursAt().toString();
+                    return "%d. [%s] %s（時間：%s）"
+                            .formatted(i + 1, item.getCategory(), item.getTitle(), when);
+                })
+                .reduce((a, b) -> a + "\n" + b)
+                .orElse("（清單是空的）");
+    }
+
+    /** @return 不合法的原因；合法時為 null */
+    private static String validate(NoteCommand.Op op, int itemCount) {
+        return switch (op.action()) {
+            case DELETE, UPDATE_TITLE, UPDATE_TIME -> {
+                Integer index = op.itemIndex();
+                if (index == null || index < 1 || index > itemCount) {
+                    yield "找不到你說的那一筆，可以說編號嗎？";
+                }
+                if (op.action() == NoteCommand.Action.UPDATE_TITLE
+                        && (op.title() == null || op.title().isBlank())) {
+                    yield "要改成什麼標題呢？";
+                }
+                if (op.action() == NoteCommand.Action.UPDATE_TIME) {
+                    if (op.occursAt() == null) {
+                        yield "要改成什麼時間呢？";
+                    }
+                    yield unparsableTime(op.occursAt());
+                }
+                yield null;
+            }
+            // ADD 與 LIST 不看 itemIndex——模型有時會順手填一個（實測填過 -1）。
+            // 那個值不會被使用，不需要因此讓整批指令失敗。
+            case ADD -> (op.title() == null || op.title().isBlank())
+                    ? "要新增什麼呢？"
+                    : unparsableTime(op.occursAt());
+            case LIST -> null;
+        };
+    }
+
+    /**
+     * 🔴 時間<b>必須在這裡</b>就解析過一次。
+     *
+     * <p>這一步原本不在驗證裡，真正的 {@code Instant.parse()} 到套用指令的迴圈中途才跑。
+     * 模型只要少給時區（{@code 2026-08-16T09:00}）就會拋 {@code DateTimeParseException}——
+     * 而那時前面幾個動作已經改過資料，例外讓整個交易回滾，outbox 重試五次後放棄，
+     * <b>使用者一則回覆都收不到</b>。明明有「看不懂就回一句話」的完整路徑，卻走不到。
+     *
+     * <p>驗證的意義是<b>在動手之前就知道做不做得到</b>。
+     *
+     * @return 不合法的原因；可以解析或根本沒填時為 null
+     */
+    private static String unparsableTime(String iso) {
+        if (iso == null || iso.isBlank()) {
+            return null;
+        }
+        try {
+            Instant.parse(iso);
+            return null;
+        } catch (DateTimeParseException e) {
+            log.warn("模型給的時間解析不了：{}", iso);
+            return "我看不懂那個時間，可以說得更明確嗎？（例如「8月16號早上九點」）";
+        }
+    }
+
+    /** 判斷不出來就當待辦——寧可分類錯，也不要因為分類而整批失敗。 */
+    static NoteCategory parseCategory(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return NoteCategory.TODO;
+        }
+        try {
+            return NoteCategory.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return NoteCategory.TODO;
+        }
+    }
+
+    static Instant parseOccursAt(String iso) {
+        return (iso == null || iso.isBlank()) ? null : Instant.parse(iso);
+    }
 }
