@@ -12,7 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
-import io.svra.note.NoteItem;
 import io.svra.note.NoteCategory;
 
 /**
@@ -73,7 +72,7 @@ class NoteCommandParser {
      * @param userText 使用者說的話
      * @param items    目前生效的項目，順序即編號順序
      */
-    public NoteCommand parse(String userText, List<NoteItem> items) {
+    public NoteCommand parse(String userText, List<ItemSnapshot> items) {
 
         String system = SYSTEM.formatted(renderItems(items), LocalDate.now(clock.withZone(zone)));
 
@@ -107,13 +106,13 @@ class NoteCommandParser {
     }
 
     /** 把項目清單排成 LLM 讀得懂的樣子，編號與推播訊息一致。 */
-    static String renderItems(List<NoteItem> items) {
+    static String renderItems(List<ItemSnapshot> items) {
         return IntStream.range(0, items.size())
                 .mapToObj(i -> {
-                    NoteItem item = items.get(i);
-                    String when = item.getOccursAt() == null ? "無" : item.getOccursAt().toString();
+                    ItemSnapshot item = items.get(i);
+                    String when = item.occursAt() == null ? "無" : item.occursAt().toString();
                     return "%d. [%s] %s（時間：%s）"
-                            .formatted(i + 1, item.getCategory(), item.getTitle(), when);
+                            .formatted(i + 1, item.category(), item.title(), when);
                 })
                 .reduce((a, b) -> a + "\n" + b)
                 .orElse("（清單是空的）");
