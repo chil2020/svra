@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
@@ -54,9 +55,31 @@ class NoteCommandParser {
       - 完全看不懂時，ops 留空並在 reason 用一句話說明，會直接回給使用者
       - 使用者講的事情裡若有你做不到的（例如「幫我排版」），把那部分寫進
         unhandled（用使用者的話複述），沒有就留空
+      - reason 與 unhandled 會**原封不動顯示在聊天視窗裡**給使用者看。
+        用他聽得懂的話寫：不要提欄位名稱（occursAt、itemIndex）、動作代號
+        （ADD、DELETE、LIST），也不要引用這份規則本身。
+        ✗「未指定時間（occursAt），根據規則 ADD 動作需填寫 occursAt」
+        ✓「這件事要幫你記在什麼時候呢？」
 
       今天是 %s。
       """;
+
+    /** 看不懂時的固定說法。模型寫的句子若帶著內部術語，就退回這一句。 */
+    private static final String FALLBACK_REASON = "看不懂這個指令，可以換個說法嗎？";
+    /** 同上，用在「這部分我還不會處理：」後面。 */
+    private static final String FALLBACK_UNHANDLED = "你說的其中一部分";
+
+    /**
+     * 不該出現在使用者眼前的字：這份 prompt 的欄位名與動作代號。
+     *
+     * <p>回覆是中文的，所以英文識別字幾乎不可能是使用者自己講的話。
+     * 誤判的代價也只是換成一句比較籠統的回覆，比讓術語漏出去輕。
+     */
+    private static final Pattern JARGON = Pattern.compile(
+            "occursAt|itemIndex|unhandled|\\bops\\b|\\bJSON\\b|\\bnull\\b"
+                    + "|\\bDELETE\\b|\\bUPDATE_TITLE\\b|\\bUPDATE_TIME\\b"
+                    + "|\\bADD\\b|\\bLIST\\b|\\bSCHEDULE\\b|\\bTODO\\b|\\bIDEA\\b",
+            Pattern.CASE_INSENSITIVE);
 
     private final ChatClient chatClient;
     private final Clock clock;
@@ -84,9 +107,8 @@ class NoteCommandParser {
                     .entity(NoteCommand.class);
 
             if (result.isUnknown()) {
-                return result.reason() == null
-                        ? NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？")
-                        : result;
+                String reason = userFacing(result.reason(), FALLBACK_REASON);
+                return NoteCommand.unknown(reason == null ? FALLBACK_REASON : reason);
             }
 
             // 一個動作不合法就整批退回。只做一半又不說，比什麼都不做更糟。
@@ -97,12 +119,37 @@ class NoteCommandParser {
                     return NoteCommand.unknown(invalid);
                 }
             }
-            return result;
+            return new NoteCommand(result.ops(), result.reason(),
+                    userFacing(result.unhandled(), FALLBACK_UNHANDLED));
 
         } catch (Exception e) {
             log.warn("指令解析失敗：{}", userText, e);
-            return NoteCommand.unknown("看不懂這個指令，可以換個說法嗎？");
+            return NoteCommand.unknown(FALLBACK_REASON);
         }
+    }
+
+    /**
+     * 模型寫給使用者看的句子，出去之前過一道濾網。
+     *
+     * <p>{@code reason} 與 {@code unhandled} 會<b>原封不動</b>顯示在聊天視窗裡，
+     * 而它們是模型寫的——模型讀得到 prompt 裡的欄位名與動作代號，於是實測回過
+     * 「未指定時間（occursAt），根據規則 ADD 動作需填寫 occursAt」。
+     * 那是講給開發者聽的話，出現在使用者的聊天視窗裡。
+     *
+     * <p>prompt 已經明講這兩欄是給人看的，但 <b>prompt 是請求不是保證</b>——
+     * 同一個模型換個溫度、換個版本就可能又漏出來。要擋得住就要有程式擋。
+     *
+     * @return 原句；帶著術語時回傳 {@code fallback}；原本就是空的時候回 {@code null}
+     */
+    static String userFacing(String modelText, String fallback) {
+        if (modelText == null || modelText.isBlank()) {
+            return null;
+        }
+        if (JARGON.matcher(modelText).find()) {
+            log.warn("模型的回覆帶著內部術語，已改用固定說法：{}", modelText);
+            return fallback;
+        }
+        return modelText;
     }
 
     /** 把項目清單排成 LLM 讀得懂的樣子，編號與推播訊息一致。 */
