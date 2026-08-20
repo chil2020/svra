@@ -6,6 +6,8 @@ import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
+import io.svra.LogContext;
+
 /**
  * 消費死信佇列，把 worker 放棄掉的任務收尾。
  *
@@ -37,10 +39,10 @@ class TranscribeDlqListener {
             throw new AmqpRejectAndDontRequeueException("死信訊息缺少 job_id，無法對應 note");
         }
 
-        log.error("轉錄任務進了死信佇列，標記為失敗並通知使用者：jobId={} audioFile={}",
-                job.jobId(), job.audioFile());
-
-        failureReporter.report(job.jobId());
+        try (var ignored = LogContext.messageId(job.jobId())) {
+            log.error("轉錄任務進了死信佇列，標記為失敗並通知使用者：audioFile={}", job.audioFile());
+            failureReporter.report(job.jobId());
+        }
     }
 
     /**
@@ -55,9 +57,9 @@ class TranscribeDlqListener {
             throw new AmqpRejectAndDontRequeueException("死信結果缺少 job_id，無法對應 note");
         }
 
-        log.error("轉錄結果進了死信佇列，標記為失敗並通知使用者：jobId={} status={}",
-                result.jobId(), result.status());
-
-        failureReporter.report(result.jobId());
+        try (var ignored = LogContext.messageId(result.jobId())) {
+            log.error("轉錄結果進了死信佇列，標記為失敗並通知使用者：status={}", result.status());
+            failureReporter.report(result.jobId());
+        }
     }
 }

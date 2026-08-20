@@ -63,6 +63,12 @@ public class LlmRateLimiter {
         }
 
         if (used != null && used > properties.rateLimit()) {
+            // 沒有這一行的話，被限流會被 poller 記成通用的「outbox 重試」，
+            // 跟「Ollama 掛了」長得一模一樣，要讀例外訊息才分得出來。
+            // 而這兩件事的處置完全不同：一個是等，一個是去把 Ollama 拉起來。
+            log.warn("觸發限流，這次不打模型：userId={} 已用 {}/{}（{} 窗）。"
+                    + "會由 outbox 退避重試，不會遺失",
+                    lineUserId, used, properties.rateLimit(), window);
             throw new LlmRateLimitExceededException(
                     "%s 在 %s 內已用掉 %d 次，上限 %d"
                             .formatted(lineUserId, window, used, properties.rateLimit()));

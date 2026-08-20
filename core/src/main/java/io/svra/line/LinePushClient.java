@@ -47,6 +47,11 @@ public class LinePushClient {
         String body = text.length() > MAX_TEXT_LENGTH
                 ? text.substring(0, MAX_TEXT_LENGTH - 1) + "…"
                 : text;
+        if (text.length() > MAX_TEXT_LENGTH) {
+            // 截斷是靜靜發生的，使用者只會看到訊息斷在一半。要看得見。
+            log.warn("推播內容超過 {} 字上限，已截斷：原長度={}", MAX_TEXT_LENGTH, text.length());
+        }
+        long startedNanos = System.nanoTime();
 
         return restClient.post()
                 .uri(PUSH_URL)
@@ -65,7 +70,9 @@ public class LinePushClient {
                             || parsed.sentMessages().isEmpty())
                                     ? null
                                     : parsed.sentMessages().get(0).id();
-                    log.info("已推送訊息：userId={} 長度={} messageId={}", lineUserId, body.length(), messageId);
+                    // 不記內容——推播內容就是使用者的筆記本體。
+                    log.info("已推送訊息：字數={} 耗時={}ms lineMessageId={}",
+                            body.length(), (System.nanoTime() - startedNanos) / 1_000_000, messageId);
                     return messageId;
                 });
     }

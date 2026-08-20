@@ -56,7 +56,10 @@ public class NoteService {
     @Transactional
     public boolean recordIncoming(String lineUserId, String sourceMessageId) {
         if (noteRepository.insertPendingIfAbsent(lineUserId, sourceMessageId) == 0) {
-            log.debug("重複訊息，已忽略：messageId={}", sourceMessageId);
+            // 🔴 INFO 而不是 DEBUG。這是決策 2 唯一會留下痕跡的地方——
+            // 冪等真的擋下了一次重送。更實際的理由是：**重複投遞突然變頻繁是個訊號**
+            // （代表 webhook 在逾時，LINE 才會重送），而 DEBUG 等於永遠不會注意到。
+            log.info("重複投遞，已忽略——冪等擋下（LINE 是 at-least-once，這是正常現象）");
             return false;
         }
 
@@ -68,6 +71,7 @@ public class NoteService {
                 EVENT_TRANSCRIBE_REQUESTED,
                 toPayload(lineUserId, sourceMessageId),
                 OutboxEvent.dedupeKeyFor(EVENT_TRANSCRIBE_REQUESTED, sourceMessageId));
+        log.info("outbox 寫入：{}（與 note 同交易）", EVENT_TRANSCRIBE_REQUESTED);
         return true;
     }
 

@@ -93,13 +93,15 @@ public class NoteExtractionService {
         rateLimiter.consume(pending.lineUserId());
 
         // 用 note 的建立時間當基準：「明天」指的是錄音那天的明天。
+        long startedNanos = System.nanoTime();
         List<NoteItem> items = NoteExtractor.toItems(
                 extractor.extract(pending.transcript(), pending.recordedAt()));
+        long elapsedMillis = (System.nanoTime() - startedNanos) / 1_000_000;
 
         if (items.isEmpty()) {
             // 靜靜 return 的話，使用者傳了語音就只等到沉默——而 note 停在 COMPLETED，
             // 沒有任何欄位顯示這件事失敗過。跟「note 永遠停在 PENDING」是同一類問題。
-            log.warn("抽不出任何項目：messageId={}", sourceMessageId);
+            log.warn("抽不出任何項目，已通知使用者");
             pushClient.pushText(pending.lineUserId(),
                     "🤔 這段語音我沒抽出可以整理的內容，換個說法再試一次？");
             return;
@@ -107,7 +109,9 @@ public class NoteExtractionService {
 
         // ── 第三段：短交易，抽取結果與推播意圖同進同退 ──
         tx.executeWithoutResult(status -> save(pending, items));
-        log.info("抽取完成：messageId={} model={} items={}", sourceMessageId, model, items.size());
+        // 耗時是這一行最有價值的欄位：抽取是整條路徑最慢的一段（12 秒起跳），
+        // 而它有快取——命中與否差兩個數量級，看數字才分得出來。
+        log.info("抽取完成：items={} model={} 耗時={}ms", items.size(), model, elapsedMillis);
     }
 
     /** 第一段要帶到交易外面的東西。只放值，不放 entity——交易結束它就 detached 了。 */
@@ -119,11 +123,11 @@ public class NoteExtractionService {
     private Pending loadPending(String sourceMessageId) {
         Note note = noteRepository.findBySourceMessageId(sourceMessageId).orElse(null);
         if (note == null) {
-            log.error("要抽取但找不到 note：messageId={}", sourceMessageId);
+            log.error("要抽取但找不到 note");
             return null;
         }
         if (note.getTranscript() == null || note.getTranscript().isBlank()) {
-            log.warn("逐字稿是空的，跳過抽取：messageId={}", sourceMessageId);
+            log.warn("逐字稿是空的，跳過抽取，已通知使用者");
             pushClient.pushText(note.getLineUserId(),
                     "🔇 這段語音我聽不出內容，可以再錄一次嗎？");
             return null;
@@ -135,7 +139,7 @@ public class NoteExtractionService {
         // 「明確要求取代現行版本」的入口，而那個入口還沒做。目前這樣的取捨是：
         // 寧可不重抽，也不要在使用者沒要求時默默蓋掉他編輯過的東西。
         if (extractionRepository.findByNoteIdAndActiveTrue(note.getId()).isPresent()) {
-            log.info("已有生效的抽取結果，跳過重抽：messageId={}", sourceMessageId);
+            log.info("已有生效的抽取結果，跳過重抽（outbox 重送）");
             return null;
         }
         return new Pending(note.getId(), sourceMessageId, note.getLineUserId(),
@@ -146,8 +150,7 @@ public class NoteExtractionService {
         // 再查一次：第二段花了十幾秒，這期間另一個實例可能已經寫進去了。
         // 真的撞上時 note_extractions 的部分唯一索引也還擋著（uk_active_extraction）。
         if (extractionRepository.findByNoteIdAndActiveTrue(pending.noteId()).isPresent()) {
-            log.info("抽取期間已有別人寫入生效版本，放棄這次結果：messageId={}",
-                    pending.sourceMessageId());
+            log.info("抽取期間已有別人寫入生效版本，放棄這次結果");
             return;
         }
 

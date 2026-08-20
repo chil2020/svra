@@ -101,7 +101,7 @@ public class NoteCommandService {
                 payload,
                 OutboxEvent.dedupeKeyFor(
                         NoteService.EVENT_COMMAND_REQUESTED, commandMessageId)) == 0) {
-            log.debug("重複的指令訊息，已忽略：messageId={}", commandMessageId);
+            log.info("重複投遞的指令，已忽略——冪等鍵擋下（決策 2）");
         }
     }
 
@@ -160,7 +160,7 @@ public class NoteCommandService {
         // 先查一次，是為了省掉一次 LLM 呼叫與一次限流額度。
         // 這不是權威的判斷——真正的判斷在 apply()，理由寫在那裡。
         if (executionRepository.existsById(payload.commandMessageId())) {
-            log.info("指令已經執行過，跳過重跑：messageId={}", payload.commandMessageId());
+            log.info("指令已經執行過，跳過重跑（outbox 是 at-least-once）");
             return null;
         }
 
@@ -189,8 +189,7 @@ public class NoteCommandService {
         //
         // 寫在這裡，紀錄與變更同進同退：要嘛都發生，要嘛都沒發生而由 outbox 再試一次。
         if (executionRepository.insertIfAbsent(payload.commandMessageId()) == 0) {
-            log.info("指令在解析期間已被執行，放棄這次結果：messageId={}",
-                    payload.commandMessageId());
+            log.info("指令在解析期間已被執行，放棄這次結果");
             return;
         }
 
@@ -204,8 +203,7 @@ public class NoteCommandService {
                 payload.commandMessageId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
                 toPushPayload(payload.lineUserId(), execute(payload, prepared, command))));
-        log.info("指令已處理：{} 個動作 messageId={}",
-                command.isUnknown() ? 0 : command.ops().size(), payload.commandMessageId());
+        log.info("指令已處理：{} 個動作", command.isUnknown() ? 0 : command.ops().size());
     }
 
     private String toPushPayload(String lineUserId, String text) {

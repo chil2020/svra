@@ -20,6 +20,11 @@ import io.svra.note.NoteCategory;
  *
  * <p>
  * 🔴 承重點⑤。
+ *
+ * <p><b>log 政策</b>：成功路徑只記數量與長度，<b>使用者的原話只在 WARN 以上出現</b>。
+ * 理由是修 prompt 需要原文——「解析失敗」而不知道使用者講了什麼，就只能猜；
+ * 但那是個人筆記內容，不該在一切正常時也躺在 log 裡。
+ * 逐字稿那邊同一個標準（{@code TranscribeResultListener} 只記字數）。
  */
 @Component
 class NoteCommandParser {

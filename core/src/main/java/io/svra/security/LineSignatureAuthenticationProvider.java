@@ -2,6 +2,8 @@ package io.svra.security;
 
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
@@ -19,6 +21,8 @@ import io.svra.line.LineProperties;
  * 拆開的好處是判斷邏輯不綁 Servlet API——這個類別可以單獨測，不需要 MockMvc。
  */
 class LineSignatureAuthenticationProvider implements AuthenticationProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(LineSignatureAuthenticationProvider.class);
 
     /**
      * 授權用的角色。取名 WEBHOOK 而不是 USER：通過的是「這個請求來自 LINE」，
@@ -40,12 +44,24 @@ class LineSignatureAuthenticationProvider implements AuthenticationProvider {
             throw new BadCredentialsException("缺少 LINE 簽章憑據");
         }
         if (payload.signature() == null) {
+            // 🔴 DEBUG 而不是 WARN。webhook 掛在公開網域上，掃描器與亂打的請求
+            // 一定會有，而它們的共同特徵就是「根本沒帶簽章」。記成 WARN 只會把
+            // log 洗掉，讓下面那個真正該看的訊息淹沒在雜訊裡。
+            log.debug("拒絕未簽章的請求");
             throw new BadCredentialsException("請求沒有帶 " + LineSignatureAuthenticationFilter.SIGNATURE_HEADER);
         }
         if (payload.body() == null) {
             throw new BadCredentialsException("讀不到 request body，無法驗簽");
         }
         if (!LineSignature.matches(payload.body(), this.lineProperties.channelSecret(), payload.signature())) {
+            // 🔴 這個要 WARN。**LINE 一定會帶對的簽章**，所以「帶了簽章但驗不過」
+            // 幾乎不可能是外人——最可能是 channel secret 跟 LINE 後台不一致。
+            // 不記的話，設定錯的症狀是「LINE 一直重送、log 一片乾淨」，無從查起。
+            //
+            // 不印簽章本身：它對不上就沒有診斷價值，印出來反而是把別人送的
+            // 任意字串寫進 log。
+            log.warn("簽章不符——對方帶了簽章卻驗不過。"
+                    + "LINE 一定會帶正確簽章，所以最可能是 channel secret 跟後台不一致");
             throw new BadCredentialsException("LINE 簽章不符");
         }
 

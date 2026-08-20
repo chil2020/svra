@@ -6,6 +6,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.stereotype.Component;
 
+import io.svra.LogContext;
 import io.svra.note.NoteService;
 
 @Component
@@ -32,11 +33,16 @@ public class TranscribeResultListener {
             throw new AmqpRejectAndDontRequeueException("結果訊息缺少 job_id");
         }
 
-        log.info("收到轉錄結果：jobId={} status={} chars={}",
-                result.jobId(), result.status(),
-                result.text() == null ? 0 : result.text().length());
+        // job_id 就是 LINE 的 message id，不再叫它 jobId——同一個值兩個名字，
+        // 讀 log 的人看不出那是同一件事（見 LogContext）。
+        try (var ignored = LogContext.messageId(result.jobId())) {
+            log.info("收到轉錄結果：status={} 字數={} 音檔={}s",
+                    result.status(),
+                    result.text() == null ? 0 : result.text().length(),
+                    result.audioDurationSec());
 
-        noteService.applyTranscription(
-                result.jobId(), result.text(), result.language(), result.audioDurationSec());
+            noteService.applyTranscription(
+                    result.jobId(), result.text(), result.language(), result.audioDurationSec());
+        }
     }
 }

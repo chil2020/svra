@@ -16,6 +16,8 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import io.svra.LogContext;
+
 /**
  * 把 outbox 裡的待送事件真的送出去。
  *
@@ -58,35 +60,81 @@ public class OutboxPoller {
         Instant now = Instant.now(clock);
         List<OutboxEvent> batch = outboxRepository.lockNextBatch(BATCH_SIZE, now);
         if (batch.isEmpty()) {
+            // 空轉每 2 秒一次，記了會把 log 洗掉。撈到東西才出聲。
             return;
         }
+        log.debug("撈到 {} 筆待送事件", batch.size());
 
         for (OutboxEvent event : batch) {
-            OutboxEventHandler handler = handlers.get(event.getEventType());
-            try {
-                if (handler == null) {
-                    throw new IllegalStateException("沒有處理器對應事件型別：" + event.getEventType());
-                }
-                runOutsideOwnTransaction(() -> handler.handle(event.getPayload()));
-
-                event.markSent(now);
-            } catch (Exception e) {
-                log.warn("outbox 發送失敗：id={} type={} attempts={}",
-                        event.getId(), event.getEventType(), event.getAttempts(), e);
-                event.markFailed(e.toString(), now);
-
-                // 重試耗盡就不會再有人處理這個事件了，讓對應的處理器自己收尾——
-                // 該怎麼善後只有它知道（例如把 note 標成 FAILED）。
-                if (event.getStatus() == OutboxStatus.FAILED && handler != null) {
-                    try {
-                        runOutsideOwnTransaction(() -> handler.onGiveUp(event.getPayload()));
-                    } catch (Exception cleanupFailure) {
-                        log.error("放棄後的收尾也失敗：id={}", event.getId(), cleanupFailure);
-                    }
-                }
-                // 不 throw —— 這一批的其他筆要能繼續
+            // MDC 設在這裡最划算：所有 handler 都跑在這個執行緒上，
+            // 下載音檔、抽取、推播、指令套用全部自動繼承，不用逐個改。
+            // aggregate_id 就是 LINE 的 message id（見 LogContext）。
+            try (var ignored = LogContext.messageId(event.getAggregateId())) {
+                dispatchOne(event, now);
             }
         }
+    }
+
+    private void dispatchOne(OutboxEvent event, Instant now) {
+        OutboxEventHandler handler = handlers.get(event.getEventType());
+        long startedNanos = System.nanoTime();
+        try {
+            if (handler == null) {
+                throw new IllegalStateException("沒有處理器對應事件型別：" + event.getEventType());
+            }
+            runOutsideOwnTransaction(() -> handler.handle(event.getPayload()));
+
+            event.markSent(now);
+            log.info("outbox 送出：{} id={} 耗時={}ms",
+                    event.getEventType(), event.getId(), elapsedMillis(startedNanos));
+
+        } catch (Exception e) {
+            event.markFailed(e.toString(), now);
+
+            if (event.getStatus() == OutboxStatus.FAILED) {
+                // 🔴 「放棄」與「第 3 次重試」必須長得不一樣。
+                // 這兩件事以前共用同一行 warn，唯一的差別是 attempts 剛好等於上限——
+                // 而「這筆永遠不會再送了」是這個系統最需要被看見的事件之一。
+                log.error("outbox 放棄：{} id={} 已重試 {} 次，不會再送",
+                        event.getEventType(), event.getId(), event.getAttempts(), e);
+                giveUp(event, handler);
+            } else {
+                log.warn("outbox 重試：{} id={} 第 {}/{} 次，{}後再試：{}",
+                        event.getEventType(), event.getId(), event.getAttempts(),
+                        OutboxEvent.MAX_ATTEMPTS,
+                        humanizeUntil(now, event.getNextAttemptAt()), e.toString());
+            }
+            // 不 throw —— 這一批的其他筆要能繼續
+        }
+    }
+
+    /**
+     * 重試耗盡就不會再有人處理這個事件了，讓對應的處理器自己收尾——
+     * 該怎麼善後只有它知道（例如把 note 標成 FAILED 並通知使用者）。
+     */
+    private void giveUp(OutboxEvent event, OutboxEventHandler handler) {
+        if (handler == null) {
+            log.error("沒有處理器可以收尾，這筆事件沒有終局：id={}", event.getId());
+            return;
+        }
+        try {
+            runOutsideOwnTransaction(() -> handler.onGiveUp(event.getPayload()));
+            log.info("放棄後的收尾已完成：id={}", event.getId());
+        } catch (Exception cleanupFailure) {
+            // 收尾也失敗＝使用者不會知道這件事被放棄了，比放棄本身更嚴重
+            log.error("放棄後的收尾也失敗，使用者不會收到任何通知：id={}",
+                    event.getId(), cleanupFailure);
+        }
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    /** 「30 秒」比一個絕對時間戳好讀——看 log 的人想知道的是還要等多久。 */
+    private static String humanizeUntil(Instant now, Instant next) {
+        long seconds = Math.max(0, next.getEpochSecond() - now.getEpochSecond());
+        return seconds + " 秒";  // 呼叫端接「後再試」
     }
 
     /**
