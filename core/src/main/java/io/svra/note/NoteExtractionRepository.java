@@ -10,7 +10,4 @@ public interface NoteExtractionRepository extends JpaRepository<NoteExtraction, 
     Optional<NoteExtraction> findByNoteIdAndActiveTrue(Long noteId);
 
     List<NoteExtraction> findByNoteIdOrderByCreatedAtDesc(Long noteId);
-
-    /** 使用者引用某則推播下指令時，用推播的訊息 ID 反查是哪一批項目。 */
-    Optional<NoteExtraction> findByNotifyMessageId(String notifyMessageId);
 }

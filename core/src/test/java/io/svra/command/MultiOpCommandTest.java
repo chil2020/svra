@@ -21,6 +21,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.svra.llm.LlmRateLimiter;
+import io.svra.notify.MessageAnchors;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
 import io.svra.note.NoteExtractionRepository;
@@ -58,6 +59,7 @@ class MultiOpCommandTest {
     /** 用真的 mapper：回覆現在寫進 outbox 的 payload，要驗內容就得序列化得出來。 */
     private final JsonMapper objectMapper = JsonMapper.builder().build();
     @Mock LlmRateLimiter rateLimiter;
+    @Mock MessageAnchors anchors;
     @Mock PlatformTransactionManager transactionManager;
 
     private NoteCommandService service;
@@ -68,19 +70,23 @@ class MultiOpCommandTest {
         service = new NoteCommandService(noteRepository, extractionRepository, itemRepository,
                 executionRepository,
                 Clock.fixed(Instant.parse("2026-08-18T09:00:00Z"), ZoneId.of("Asia/Taipei")),
-                parser, outboxRepository, objectMapper, rateLimiter,
+                parser, outboxRepository, objectMapper, rateLimiter, anchors,
                 transactionManager);
 
         extraction = NoteExtraction.of(1L, "raw", "v-test");
+        // id 平常由資料庫給。少了它，指令會以為「引用沒對到」而退回整體清單。
+        ReflectionTestUtils.setField(extraction, "id", 100L);
         extraction.addItem(item(1L, "第一筆"));
         extraction.addItem(item(2L, "第二筆"));
         extraction.addItem(item(3L, "第三筆"));
 
+        // 用 thenAnswer 而不是凍結一份快照：真實的查詢會反映這個交易裡剛改完的樣子，
+        // 回傳固定清單的話，驗「回覆內容」時看到的永遠是改動前的狀態。
         when(itemRepository.findUpcoming(anyString(), any()))
-                .thenReturn(List.copyOf(extraction.getItems()));
+                .thenAnswer(inv -> List.copyOf(extraction.getItems()));
         // 第三段用 id 重新載入目標，回傳的就是同一批物件。
         when(itemRepository.findAllById(any()))
-                .thenReturn(List.copyOf(extraction.getItems()));
+                .thenAnswer(inv -> List.copyOf(extraction.getItems()));
         // 沒執行過，而且這次搶到了。
         when(executionRepository.existsById(anyString())).thenReturn(false);
         when(executionRepository.insertIfAbsent(anyString())).thenReturn(1);
@@ -163,7 +169,7 @@ class MultiOpCommandTest {
     @Test
     @DisplayName("引用的訊息對不回任何一批 → 指名項目的動作不執行，並說出來")
     void refusesTargetedOpsWhenQuoteCannotBeResolved() {
-        when(extractionRepository.findByNotifyMessageId(anyString())).thenReturn(Optional.empty());
+        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.empty());
 
         executeQuoting("unknown-message", delete(1));
 
@@ -174,29 +180,77 @@ class MultiOpCommandTest {
     }
 
     @Test
-    @DisplayName("引用的是已失效的版本 → 一樣算對不上，不要對看不見的資料動手")
-    void treatsInactiveExtractionAsUnresolved() {
-        extraction.deactivate();
-        when(extractionRepository.findByNotifyMessageId(anyString()))
-                .thenReturn(Optional.of(extraction));
+    @DisplayName("引用的訊息還在，但那一筆已經被刪了 → 精確說是哪一筆，不要對看不見的資料動手")
+    void reportsExactlyWhichQuotedItemIsGone() {
+        // 錨點還在（那則訊息推播過），但項目本身已經不在了
+        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
+        when(itemRepository.findAllById(any())).thenReturn(List.of());
 
         executeQuoting("stale-message", delete(1));
 
-        assertThat(extraction.getItems()).hasSize(3);
+        assertThat(extraction.getItems())
+                .as("看不見的資料不能動——回「已刪除」而使用者什麼也看不到是最糟的")
+                .hasSize(3);
         assertThat(replyPayload())
-                .as("對失效版本執行會回「已刪除」而使用者什麼也看不到——成功訊息加零效果")
-                .contains("對不上");
+                .as("錨點知道使用者指的是哪一筆，就該精確說那一筆怎麼了，"
+                        + "而不是籠統地說「你引用的我對不上」")
+                .contains("第 1 筆已經不在清單上了");
     }
 
     @Test
     @DisplayName("引用對不上，但只是要看清單 → 照做。LIST 不指涉編號")
     void stillAnswersListWhenQuoteCannotBeResolved() {
-        when(extractionRepository.findByNotifyMessageId(anyString())).thenReturn(Optional.empty());
+        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.empty());
 
         executeQuoting("unknown-message",
                 new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null));
 
         assertThat(replyPayload()).contains("目前還有這些");
+    }
+
+    @Test
+    @DisplayName("回覆是調整後的清單，不是「改了什麼」的變更說明")
+    void replyIsTheUpdatedListNotAChangeLog() {
+        execute(delete(1));
+
+        String reply = replyPayload();
+        assertThat(reply)
+                .as("使用者要的是那則訊息的新版本，清單本身就是確認")
+                .contains("已更新")
+                .contains("第二筆").contains("第三筆");
+        assertThat(reply)
+                .as("刪掉的那筆不該還出現在回覆裡")
+                .doesNotContain("第一筆");
+        assertThat(reply)
+                .as("不要逐條交代做了什麼——那是要使用者照著說明反推結果")
+                .doesNotContain("已刪除");
+    }
+
+    @Test
+    @DisplayName("引用某一批時，回覆的是那一批的新版本，不混進其他語音的項目")
+    void quotedCommandRepliesWithThatBatchOnly() {
+        NoteItem other = item(9L, "別則語音的項目");
+        when(itemRepository.findUpcoming(anyString(), any()))
+                .thenReturn(List.of(other));   // 整體清單裡有別的東西
+        when(anchors.itemIdsFor("push-1")).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
+
+        executeQuoting("push-1", delete(1));
+
+        assertThat(replyPayload())
+                .as("使用者盯著的是那則訊息，回的就該是它的新版本")
+                .contains("第二筆")
+                .doesNotContain("別則語音的項目");
+    }
+
+    @Test
+    @DisplayName("只是要看清單 → 說「目前還有這些」，不能說「已更新」")
+    void listOnlyDoesNotClaimAnUpdate() {
+        execute(new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null));
+
+        assertThat(replyPayload())
+                .as("什麼都沒改卻說已更新，就是宣稱一件沒發生的事")
+                .contains("目前還有這些")
+                .doesNotContain("已更新");
     }
 
     /** 這一輪寫進 outbox 的回覆內容。回覆改由 outbox 送出之後，驗的是它而不是 push。 */

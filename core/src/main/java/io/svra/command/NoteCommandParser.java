@@ -165,6 +165,11 @@ class NoteCommandParser {
         return IntStream.range(0, items.size())
                 .mapToObj(i -> {
                     ItemSnapshot item = items.get(i);
+                    // 已經被刪掉的項目仍然佔著編號——抽掉的話後面每一筆都會往前挪，
+                    // 而使用者看的是那則舊訊息上的編號。
+                    if (item.gone()) {
+                        return "%d. （這一筆已經被刪掉了）".formatted(i + 1);
+                    }
                     String when = item.occursAt() == null ? "無" : item.occursAt().toString();
                     return "%d. [%s] %s（時間：%s）"
                             .formatted(i + 1, item.category(), item.title(), when);

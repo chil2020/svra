@@ -41,13 +41,16 @@ public class NoteNotifier {
     private final NoteRepository noteRepository;
     private final NoteExtractionRepository extractionRepository;
     private final LinePushClient pushClient;
+    private final MessageAnchors anchors;
 
     public NoteNotifier(NoteRepository noteRepository,
             NoteExtractionRepository extractionRepository,
-            LinePushClient pushClient) {
+            LinePushClient pushClient,
+            MessageAnchors anchors) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
         this.pushClient = pushClient;
+        this.anchors = anchors;
     }
 
     @Transactional
@@ -65,10 +68,11 @@ public class NoteNotifier {
             return;
         }
 
-        String messageId = pushClient.pushText(note.getLineUserId(), render(extraction.getOrderedItems()));
-        // 記下來，使用者引用這則訊息下指令時才對應得回這批項目。
+        List<NoteItem> items = extraction.getOrderedItems();
+        String messageId = pushClient.pushText(note.getLineUserId(), render(items));
+        // 記下當時的編號順序，使用者引用這則訊息下指令時才對得回同一批。
         // 交易在推播成功後才提交——推播失敗就整筆回滾，由 outbox 重試。
-        extraction.recordNotified(messageId);
+        anchors.record(messageId, note.getLineUserId(), items.stream().map(NoteItem::getId).toList());
     }
 
     /** 抽取完成後推播用。 */
@@ -82,18 +86,30 @@ public class NoteNotifier {
      * <p>抬頭要跟推播不一樣——共用同一句「已整理好你的語音筆記」的話，
      * 使用者問的是現況、收到的卻像是剛處理完一則語音，答非所問。
      *
-     * <p>結尾也不同：推播那則的 messageId 會存進 {@code notify_message_id}，
-     * 引用它能精準對回那一批；這則沒有存，引用時是退回「目前全部項目」。
-     * 兩者的編號目前一致（都走 {@code NoteCategory.itemOrder()}），
-     * 但那是<b>當下</b>一致——中間刪過東西編號就會漂。
-     * 所以這裡不承諾「引用這則」，只說怎麼下一句指令。
+     * <p>結尾不承諾「引用這則」而是說「直接回覆」：兩種都可以，
+     * 但後者少一個步驟，而使用者常常是接著就講下一句。
      */
     public static String renderCurrent(List<NoteItem> items) {
         return render(items, "📋 目前還有這些", "\n直接回覆就可以修改或刪除");
     }
 
+    /**
+     * 指令執行完之後的回覆：<b>調整後的清單本身</b>。
+     *
+     * <p>不列「刪了什麼、改了什麼」——使用者要的是那則訊息的新版本，
+     * 而清單本身就是最好的確認：他可以直接看到結果對不對，不用照著一段變更說明反推。
+     */
+    public static String renderUpdated(List<NoteItem> items) {
+        return render(items, "✅ 已更新", "\n直接回覆就可以繼續修改");
+    }
+
     /** 供推播與「列出行程」共用——兩邊必須是同一份編號。 */
     private static String render(List<NoteItem> items, String heading, String footer) {
+        if (items.isEmpty()) {
+            // 只有抬頭跟結尾的訊息看起來像壞掉了。空清單是正常狀態，要講出來。
+            return heading + "\n\n（目前沒有任何項目）";
+        }
+
         Map<NoteCategory, List<NoteItem>> byCategory = items.stream()
                 .sorted(NoteCategory.itemOrder())
                 .collect(Collectors.groupingBy(NoteItem::getCategory));
