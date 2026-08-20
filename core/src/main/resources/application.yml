@@ -1,3 +1,31 @@
+logging:
+  pattern:
+    # 收緊過的格式。Boot 預設的前綴約 110 字元（時間戳含日期、pid、[svra-core]、
+    # 40 字元的 logger），訊息本體被擠到很右邊。這裡拿掉日期（本機開發看得到今天）、
+    # pid 與應用名（單一行程，沒有分辨需要），換來 [messageId] 那一欄。
+    #
+    # [%X{messageId}]：見 io.svra.LogContext。<b>不截短</b>——LINE 的 message id 是
+    # 18 位數，佔版面，但截了就 grep 不到完整值，也對不上 whisper worker 的 job=。
+    # 最小寬度 18（剛好是 id 的長度），但**不設上限**：沒有 id 的行補空白讓欄位對齊，
+    # 而比 18 長的值寧可把行推寬，也不能截斷——logback 的 .N 是從<b>開頭</b>砍
+    # （實測 36 字元的 UUID 只剩尾巴 18 個字元），而<b>一個被截斷的 id 是 grep 不到的</b>，
+    # 那正好毀掉 MDC 唯一的用途。
+    # 平常運作時幾乎每一行都有 id，只有 Spring 自己的啟動訊息是空的。
+    #
+    # %-11.-11thread：從<b>後面</b>截（`.-11`），因為執行緒名的識別資訊在尾巴——
+    # http-nio-8443-exec-1 從前面截會變成 "http-nio"，每條都一樣。
+    #
+    # %replace 只留 logger 的<b>最後兩段</b>：io.svra.outbox.OutboxPoller →
+    # outbox.OutboxPoller，org.springframework.boot.tomcat.TomcatWebServer →
+    # tomcat.TomcatWebServer。這比 Boot 預設的 i.s.o.OutboxPoller 好認，
+    # 也比直接截斷安全——截斷會把最有用的類別名切掉，只剩一串套件前綴。
+    # 不設上限（只設最小寬度）：偶爾有長名稱把訊息推右邊，好過看不出是哪個類別。
+    console: "%d{HH:mm:ss.SSS} %-5level [%-18X{messageId:-}] %-11.-11thread %-30replace(%logger){'^.*?([^.]+\\.[^.]+)$','$1'} : %msg%n%wEx"
+  level:
+    # 想看某一層的細節時單獨打開，例如：
+    #   LOGGING_LEVEL_IO_SVRA_OUTBOX=DEBUG ./run-core.sh
+    io.svra: ${LOG_LEVEL_SVRA:INFO}
+
 server:
   # 8080 太常被別的東西佔走，改用 8443（1024 以上不需要 root）
   port: ${SERVER_PORT:8443}
@@ -5,6 +33,10 @@ server:
 spring:
   application:
     name: svra-core
+  task:
+    scheduling:
+      # 預設是 scheduling-1，改短一點讓 log 的執行緒欄好認。outbox poller 跑在這上面。
+      thread-name-prefix: sched-
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/svra}
     username: ${POSTGRES_USER:svra}
