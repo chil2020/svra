@@ -107,6 +107,7 @@ public class NoteCommandService {
         if (outboxRepository.insertIfAbsent(
                 commandMessageId,
                 NoteService.EVENT_COMMAND_REQUESTED,
+                lineUserId,
                 payload,
                 OutboxEvent.dedupeKeyFor(
                         NoteService.EVENT_COMMAND_REQUESTED, commandMessageId)) == 0) {
@@ -186,7 +187,8 @@ public class NoteCommandService {
     private void apply(CommandPayload payload, Prepared prepared, NoteCommand command) {
         // 🔴 冪等判斷要跟變更同交易。寫在第一段的話，提交就宣告「做過了」而變更還沒發生，
         // 中途崩潰一次指令就靜默消失——at-most-once 比重複更難查。
-        if (executionRepository.insertIfAbsent(payload.commandMessageId()) == 0) {
+        if (executionRepository.insertIfAbsent(
+                payload.commandMessageId(), payload.lineUserId()) == 0) {
             log.info("指令在解析期間已被執行，放棄這次結果");
             return;
         }
@@ -198,6 +200,7 @@ public class NoteCommandService {
         outboxRepository.save(OutboxEvent.pending(
                 payload.commandMessageId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                payload.lineUserId(),
                 serialize(outcome.reply().repliedWith(payload.replyToken()))));
 
         // 🔴 行事曆的連動也寫在<b>這個</b>交易裡，理由跟回覆完全一樣。

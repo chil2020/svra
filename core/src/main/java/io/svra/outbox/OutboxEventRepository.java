@@ -47,12 +47,26 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
      */
     @Modifying
     @Query(value = """
-            INSERT INTO outbox_events (aggregate_id, event_type, payload, status, dedupe_key)
-            VALUES (:aggregateId, :eventType, :payload, 'PENDING', :dedupeKey)
+            INSERT INTO outbox_events
+                   (aggregate_id, event_type, line_user_id, payload, status, dedupe_key)
+            VALUES (:aggregateId, :eventType, :lineUserId, :payload, 'PENDING', :dedupeKey)
             ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
             """, nativeQuery = true)
     int insertIfAbsent(@Param("aggregateId") String aggregateId,
             @Param("eventType") String eventType,
+            @Param("lineUserId") String lineUserId,
             @Param("payload") String payload,
             @Param("dedupeKey") String dedupeKey);
+
+    /**
+     * 清掉做完很久的事件。<b>只碰 SENT</b>——理由見 {@code OutboxRetention}。
+     *
+     * <p>用 {@code sent_at} 而不是 {@code created_at}：一筆重試了五次才成功的事件，
+     * 它「做完」的時間才是保留期該從哪裡算起的那一刻。
+     */
+    @Modifying
+    @Query(value = """
+            DELETE FROM outbox_events WHERE status = 'SENT' AND sent_at < :before
+            """, nativeQuery = true)
+    int deleteSentBefore(@Param("before") java.time.Instant before);
 }

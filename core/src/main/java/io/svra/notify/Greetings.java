@@ -69,6 +69,7 @@ public class Greetings {
         if (outboxRepository.insertIfAbsent(
                 webhookEventId,
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                lineUserId,
                 serialize(PushTextPayload.plain(lineUserId, WELCOME).repliedWith(replyToken)),
                 "WELCOME:" + webhookEventId) == 0) {
             log.info("重複投遞的加好友事件，歡迎訊息不重發");

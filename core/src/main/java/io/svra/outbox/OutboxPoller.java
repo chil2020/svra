@@ -82,7 +82,7 @@ public class OutboxPoller {
             if (handler == null) {
                 throw new IllegalStateException("沒有處理器對應事件型別：" + event.getEventType());
             }
-            runOutsideOwnTransaction(() -> handler.handle(event.getPayload()));
+            runOutsideOwnTransaction(() -> handler.handle(event.getId(), event.getPayload()));
 
             event.markSent(now);
             log.info("outbox 送出：{} id={} 耗時={}ms",

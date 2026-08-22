@@ -84,6 +84,16 @@ svra:
   audio-dir: ${AUDIO_DIR:./data/audio}
   outbox:
     poll-interval-ms: 2000
+  # 三張只增不減的表（outbox 事件、訊息錨點、投遞紀錄）的保留期。
+  # 兩個數字不一樣，因為它們過期的理由不同——見 RetentionProperties。
+  retention:
+    # SENT 的 outbox 事件。FAILED 的不刪：那是還沒有人去看的問題。
+    sent-events: ${RETENTION_SENT_EVENTS:30d}
+    # 訊息錨點決定使用者能不能引用一則舊訊息來下指令，而 LINE 的聊天紀錄是永久的。
+    # 刪太快 = 回覆三個月前那張卡片時被告訴「這則我對不上」。
+    message-anchors: ${RETENTION_MESSAGE_ANCHORS:180d}
+    # 清理是維護不是業務，挑一個沒有人在用的時段。
+    cron: ${RETENTION_CRON:0 0 4 * * *}
   llm:
     # 同一段逐字稿重抽不必再打模型一次。地端沒有金錢成本，但一次抽取 12 秒起跳，
     # 而 eval 與重跑都會一再送進同樣的輸入。

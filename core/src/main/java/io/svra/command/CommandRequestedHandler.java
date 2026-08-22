@@ -24,7 +24,7 @@ class CommandRequestedHandler implements OutboxEventHandler {
     }
 
     @Override
-    public void handle(String payload) {
+    public void handle(long eventId, String payload) {
         commandService.applyCommand(
                 objectMapper.readValue(payload, NoteCommandService.CommandPayload.class));
     }

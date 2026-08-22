@@ -25,7 +25,7 @@ class ExtractRequestedHandler implements OutboxEventHandler {
     }
 
     @Override
-    public void handle(String payload) {
+    public void handle(long eventId, String payload) {
         extractionService.extractFor(
                 objectMapper.readValue(payload, NoteEventPayload.class).sourceMessageId());
     }

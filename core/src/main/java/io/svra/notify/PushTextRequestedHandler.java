@@ -26,13 +26,15 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     private final ObjectMapper objectMapper;
     private final MessageAnchors anchors;
     private final Blocklist blocklist;
+    private final Deliveries deliveries;
 
     PushTextRequestedHandler(LinePushClient pushClient, ObjectMapper objectMapper,
-            MessageAnchors anchors, Blocklist blocklist) {
+            MessageAnchors anchors, Blocklist blocklist, Deliveries deliveries) {
         this.pushClient = pushClient;
         this.objectMapper = objectMapper;
         this.anchors = anchors;
         this.blocklist = blocklist;
+        this.deliveries = deliveries;
     }
 
     @Override
@@ -41,7 +43,12 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     }
 
     @Override
-    public void handle(String payload) {
+    public void handle(long eventId, String payload) {
+        // 🔴 這一行擋的是「訊息已經送出去了，但 poller 在標記 SENT 之前掛掉」。
+        // 那個窗口在同批有抽取事件時長達十七秒，而我今天為了驗證重啟了五次容器。
+        if (deliveries.alreadySent(eventId)) {
+            return;
+        }
         PushTextPayload push = objectMapper.readValue(payload, PushTextPayload.class);
         // 封鎖的人收不到，送了也是白送。直接當成功——重試不會讓他變成沒封鎖，
         // 而讓事件卡在 PENDING 只會在 log 裡堆一堆註定沒有意義的失敗。
@@ -50,6 +57,8 @@ class PushTextRequestedHandler implements OutboxEventHandler {
             return;
         }
         String lineMessageId = send(push);
+        // 先記投遞再記錨點：兩者都是「送出去之後」的事，但只有前者擋得住重送。
+        deliveries.recordSent(eventId, push.lineUserId(), lineMessageId);
         // 只有送出去之後才拿得到 messageId，錨點也只能在這裡記——
         // 少了它，使用者引用這則回覆再改一次就會對不上（見 MessageAnchors）。
         // reply 與 push 都會回傳 messageId，所以這一行兩條路共用。

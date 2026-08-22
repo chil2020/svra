@@ -164,6 +164,7 @@ public class NoteExtractionService {
         outboxRepository.save(OutboxEvent.pending(
                 pending.sourceMessageId(),
                 NoteService.EVENT_NOTIFY_REQUESTED,
+                pending.lineUserId(),
                 noteService.toPayload(pending.lineUserId(), pending.sourceMessageId())));
     }
 }

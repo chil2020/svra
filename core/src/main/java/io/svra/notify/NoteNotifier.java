@@ -80,25 +80,30 @@ public class NoteNotifier {
         this.blocklist = blocklist;
     }
 
-    /** 抽取完成後的推播。 */
+    /**
+     * 抽取完成後的推播。
+     *
+     * @return LINE 給的訊息 id；沒有推播（找不到 note、沒有生效的抽取、
+     *         使用者已封鎖）時為 null——呼叫端靠它決定要不要記投遞紀錄
+     */
     @Transactional
-    public void notifyFor(String sourceMessageId) {
+    public String notifyFor(String sourceMessageId) {
         Note note = noteRepository.findBySourceMessageId(sourceMessageId).orElse(null);
         if (note == null) {
             log.error("要推播但找不到 note：messageId={}", sourceMessageId);
-            return;
+            return null;
         }
         // 使用者可能在轉錄跑到一半時就封鎖了——那段路要數十秒，時間夠長。
         if (blocklist.isBlocked(note.getLineUserId())) {
             log.info("收件者已封鎖本帳號，略過推播：messageId={}", sourceMessageId);
-            return;
+            return null;
         }
 
         NoteExtraction extraction = extractionRepository
                 .findByNoteIdAndActiveTrue(note.getId()).orElse(null);
         if (extraction == null || extraction.getItems().isEmpty()) {
             log.warn("沒有生效的抽取結果，跳過推播：messageId={}", sourceMessageId);
-            return;
+            return null;
         }
 
         CardRenderer.Rendered card = renderer.render(extraction.getOrderedItems(),
@@ -107,6 +112,7 @@ public class NoteNotifier {
         // 記下當時的編號順序，使用者引用這則訊息下指令時才對得回同一批。
         // 交易在推播成功後才提交——推播失敗就整筆回滾，由 outbox 重試。
         anchors.record(messageId, card.cardId(), note.getLineUserId(), card.itemIds());
+        return messageId;
     }
 
     /**

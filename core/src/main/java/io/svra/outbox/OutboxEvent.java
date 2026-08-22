@@ -28,6 +28,19 @@ public class OutboxEvent {
     @Column(name = "event_type", nullable = false, length = 64)
     private String eventType;
 
+    /**
+     * 這件事是為誰做的。
+     *
+     * <p>🔴 <b>不是為了業務邏輯，是為了出事時查得到。</b>aggregate_id 對語音是
+     * notes.source_message_id，但對文字指令是指令的 message id、對 postback 是
+     * webhookEventId——後兩者都不在 notes 裡，所以「這個使用者做過什麼」
+     * 原本要靠掃描 payload 的 JSON 才查得到，而那沒有索引。
+     *
+     * <p>可為 null：舊資料補不回來，而且「不知道」比一個猜出來的值誠實。
+     */
+    @Column(name = "line_user_id", length = 64, updatable = false)
+    private String lineUserId;
+
     @Column(nullable = false, columnDefinition = "text")
     private String payload;
 
@@ -62,9 +75,11 @@ public class OutboxEvent {
     protected OutboxEvent() {
     }
 
-    private OutboxEvent(String aggregateId, String eventType, String payload, String dedupeKey) {
+    private OutboxEvent(String aggregateId, String eventType, String lineUserId,
+            String payload, String dedupeKey) {
         this.aggregateId = aggregateId;
         this.eventType = eventType;
+        this.lineUserId = lineUserId;
         this.payload = payload;
         this.dedupeKey = dedupeKey;
         this.status = OutboxStatus.PENDING;
@@ -79,8 +94,9 @@ public class OutboxEvent {
      * <p>{@code nextAttemptAt} 設成建立當下＝「立刻到期」。這是唯一還在實體裡
      * 讀時鐘的地方，因為它表達的是「不用等」而不是一個要跟別人比對的時間點。
      */
-    public static OutboxEvent pending(String aggregateId, String eventType, String payload) {
-        return new OutboxEvent(aggregateId, eventType, payload, null);
+    public static OutboxEvent pending(String aggregateId, String eventType, String lineUserId,
+            String payload) {
+        return new OutboxEvent(aggregateId, eventType, lineUserId, payload, null);
     }
 
     /**
@@ -112,10 +128,27 @@ public class OutboxEvent {
         this.status = OutboxStatus.FAILED;
     }
 
+    /**
+     * 送出去了。
+     *
+     * <p>🔴 <b>payload 一併清掉，而那是刻意的。</b>
+     *
+     * <p>推播的 payload 裡有整張卡片（實測最長 2248 字元）——標題、時間、補充內容，
+     * 也就是<b>使用者的筆記本體</b>。這個專案從一開始就有一條政策：log 不記內容
+     * （見 {@code LinePushClient}、{@code NoteCommandParser} 的註解），
+     * 理由是「推播內容就是使用者的筆記本體」。<b>而 outbox 這張表一直不受那條政策管。</b>
+     *
+     * <p>更實際的問題是它讓一個承諾做不到：使用者收回語音時我們刪掉 notes，
+     * 但那則語音抽出來的卡片內容還躺在 outbox 裡，<b>而且永遠不會被清掉</b>。
+     *
+     * <p>SENT 的事件不會再被重跑，payload 對它已經沒有用途。FAILED 的<b>要留</b>
+     * ——那時候需要它來理解到底發生了什麼，而那正是它唯一還有價值的時候。
+     */
     public void markSent(Instant now) {
         this.status = OutboxStatus.SENT;
         this.sentAt = now;
         this.lastError = null;
+        this.payload = "";
     }
 
     /**
@@ -180,5 +213,9 @@ public class OutboxEvent {
 
     public String getDedupeKey() {
         return dedupeKey;
+    }
+
+    public String getLineUserId() {
+        return lineUserId;
     }
 }

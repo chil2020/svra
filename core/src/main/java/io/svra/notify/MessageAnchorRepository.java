@@ -3,6 +3,9 @@ package io.svra.notify;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 interface MessageAnchorRepository extends JpaRepository<MessageAnchor, String> {
 
@@ -15,4 +18,9 @@ interface MessageAnchorRepository extends JpaRepository<MessageAnchor, String> {
      * 眼前那則訊息。
      */
     Optional<MessageAnchor> findFirstByCardIdOrderByCreatedAtDesc(String cardId);
+
+    /** 清掉很久以前的錨點。保留期比 outbox 長得多，理由見 {@code NotifyRetention}。 */
+    @Modifying
+    @Query(value = "DELETE FROM message_anchors WHERE created_at < :before", nativeQuery = true)
+    int deleteCreatedBefore(@Param("before") java.time.Instant before);
 }

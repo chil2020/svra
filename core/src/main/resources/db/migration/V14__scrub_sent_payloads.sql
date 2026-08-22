@@ -1,0 +1,15 @@
+-- 清掉已送出事件的 payload。
+--
+-- 從現在起 markSent() 會在標記時就清空（見 OutboxEvent.markSent），但**既有的資料
+-- 還留著**——而推播的 payload 裡是整張卡片：標題、時間、補充內容，
+-- 也就是使用者的筆記本體。實測最長 2248 字元。
+--
+-- 這個專案從第一天就有一條政策：log 不記內容，理由是「推播內容就是使用者的
+-- 筆記本體」。而 outbox 這張表一直不受那條政策管，只是沒有人注意到。
+--
+-- 更實際的是它讓一個承諾做不到：使用者收回語音時我們刪掉 notes（V3 的 CASCADE
+-- 會一路帶走抽取與項目），但那則語音抽出來的卡片內容還躺在 outbox 裡。
+--
+-- 🔴 **只清 SENT。** FAILED 的 payload 是理解那個失敗的唯一線索，
+-- 而那正是它還有價值的時候；PENDING 的是還沒做的事，清掉就永遠做不了。
+UPDATE outbox_events SET payload = '' WHERE status = 'SENT' AND payload <> '';

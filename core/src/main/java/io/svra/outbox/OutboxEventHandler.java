@@ -19,10 +19,15 @@ public interface OutboxEventHandler {
      * <p>呼叫時<b>沒有</b>外層交易（poller 會把自己的讓開），需要交易的實作
      * 自己標 {@code @Transactional}。
      *
+     * @param eventId 這筆 outbox 事件的 id。<b>會產生外部副作用而且無法冪等的處理器
+     *                需要它</b>：outbox 是 at-least-once，而「已經送出去的訊息」
+     *                沒有辦法讓 LINE 自己擋掉第二次（行事曆那條可以靠決定性 event id
+     *                讓 Google 回 409，訊息沒有對應的東西）。這個 id 是唯一
+     *                「這件事做過了」的穩定識別。
      * @param payload 事件的 JSON 內容，由實作者自己決定怎麼解讀——
      *                不同事件的 payload 形狀本來就不同
      */
-    void handle(String payload) throws Exception;
+    void handle(long eventId, String payload) throws Exception;
 
     /**
      * 重試耗盡、或被判死時呼叫。預設什麼都不做——

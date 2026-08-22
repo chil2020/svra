@@ -106,8 +106,9 @@ class CalendarReplyIdempotencyIntegrationTest {
                 List.of(CalendarSyncPayload.Target.upsert(itemId))));
 
         // poller 在 markSent() 之前掛掉，事件留在 PENDING，下一輪再撿一次。
-        handler.handle(payload);
-        handler.handle(payload);
+        // 同一個 eventId 代表「同一筆 outbox 事件被重跑」——那正是要測的情況。
+        handler.handle(1L, payload);
+        handler.handle(1L, payload);
 
         // 對 Google 重送是安全的：決定性 event id 讓第二次撞 409 轉成更新。
         verify(client, atLeastOnce()).upsert(
@@ -130,9 +131,9 @@ class CalendarReplyIdempotencyIntegrationTest {
 
         // 冪等鍵刻意用 requestId 而不是 cardId：這是兩次合法的請求，
         // 共用一個鍵會讓第二次沒有回覆，而使用者按了卻沒反應。
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-single", null, cardId,
+        handler.handle(11L, serialize(new CalendarSyncPayload(USER_ID, "wh-single", null, cardId,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-bulk", null, cardId,
+        handler.handle(12L, serialize(new CalendarSyncPayload(USER_ID, "wh-bulk", null, cardId,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
 
         assertThat(replies()).hasSize(2);
@@ -143,7 +144,7 @@ class CalendarReplyIdempotencyIntegrationTest {
     void commandDrivenSyncStaysSilent() {
         Long itemId = seedItem();
 
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "cmd-1", null, null,
+        handler.handle(13L, serialize(new CalendarSyncPayload(USER_ID, "cmd-1", null, null,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
 
         assertThat(replies()).isEmpty();

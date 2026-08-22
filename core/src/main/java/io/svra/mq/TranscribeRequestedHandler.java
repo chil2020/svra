@@ -46,7 +46,7 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
     }
 
     @Override
-    public void handle(String payload) throws Exception {
+    public void handle(long eventId, String payload) throws Exception {
         String messageId = parse(payload).sourceMessageId();
         Path target = Path.of(svra.audioDir(), messageId + ".m4a");
         try {

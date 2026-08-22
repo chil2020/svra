@@ -42,17 +42,49 @@ class PushTextRequestedHandlerTest {
     @Mock LinePushClient pushClient;
     @Mock MessageAnchors anchors;
     @Mock Blocklist blocklist;
+    @Mock Deliveries deliveries;
 
     private final JsonMapper objectMapper = JsonMapper.builder().build();
     private PushTextRequestedHandler handler;
 
     @BeforeEach
     void setUp() {
-        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors, blocklist);
+        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors, blocklist,
+                deliveries);
     }
 
+    /** 每次給不同的 eventId——除非某一題就是要測「同一筆事件被重跑」。 */
     private void handle(PushTextPayload payload) {
-        handler.handle(objectMapper.writeValueAsString(payload));
+        handler.handle(nextEventId++, objectMapper.writeValueAsString(payload));
+    }
+
+    private long nextEventId = 1;
+
+    @Test
+    @DisplayName("🔴 同一筆事件重跑 → 一則都不再送")
+    void aRetriedEventDoesNotSendAgain() {
+        when(deliveries.alreadySent(42L)).thenReturn(true);
+
+        handler.handle(42L, objectMapper.writeValueAsString(
+                PushTextPayload.card(USER_ID, "抬頭", List.of(1L), "card-1", FLEX)));
+
+        verify(pushClient, never()).pushFlex(anyString(), anyString(), anyString());
+        verify(anchors, never()).record(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("送出去之後立刻記下投遞，而且要在記錨點之前")
+    void deliveryIsRecordedRightAfterSending() {
+        when(pushClient.pushFlex(anyString(), anyString(), anyString())).thenReturn("msg-1");
+
+        handler.handle(7L, objectMapper.writeValueAsString(
+                PushTextPayload.card(USER_ID, "抬頭", List.of(1L), "card-1", FLEX)));
+
+        // 兩者都是「送出去之後」的事，但只有投遞紀錄擋得住重送——
+        // 所以它要先寫，讓中間那個縫盡量窄。
+        var order = org.mockito.Mockito.inOrder(deliveries, anchors);
+        order.verify(deliveries).recordSent(7L, USER_ID, "msg-1");
+        order.verify(anchors).record("msg-1", "card-1", USER_ID, List.of(1L));
     }
 
     @Test

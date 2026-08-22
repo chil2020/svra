@@ -93,6 +93,8 @@ class NoteServiceTest {
         verify(outboxRepository).insertIfAbsent(
                 eq(MESSAGE_ID),
                 eq(NoteService.EVENT_TRANSCRIBE_REQUESTED),
+                // 事件要帶著使用者，否則「這個人做過什麼」只能靠掃 payload 的 JSON
+                eq(USER_ID),
                 contains(MESSAGE_ID),
                 eq(OutboxEvent.dedupeKeyFor(NoteService.EVENT_TRANSCRIBE_REQUESTED, MESSAGE_ID)));
     }
@@ -104,7 +106,7 @@ class NoteServiceTest {
 
         noteService.recordIncoming(USER_ID, MESSAGE_ID);
 
-        verify(outboxRepository, never()).insertIfAbsent(any(), any(), any(), any());
+        verify(outboxRepository, never()).insertIfAbsent(any(), any(), any(), any(), any());
     }
 
     // ── U7：套用轉錄結果 ──────────────────────────────────────────

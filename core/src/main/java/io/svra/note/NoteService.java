@@ -82,6 +82,7 @@ public class NoteService {
         outboxRepository.insertIfAbsent(
                 sourceMessageId,
                 EVENT_TRANSCRIBE_REQUESTED,
+                lineUserId,
                 toPayload(lineUserId, sourceMessageId),
                 OutboxEvent.dedupeKeyFor(EVENT_TRANSCRIBE_REQUESTED, sourceMessageId));
         log.info("outbox 寫入：{}（與 note 同交易）", EVENT_TRANSCRIBE_REQUESTED);
@@ -168,6 +169,7 @@ public class NoteService {
                         outboxRepository.save(OutboxEvent.pending(
                                 sourceMessageId,
                                 EVENT_EXTRACT_REQUESTED,
+                                note.getLineUserId(),
                                 toPayload(note.getLineUserId(), sourceMessageId)));
                     }
                 },

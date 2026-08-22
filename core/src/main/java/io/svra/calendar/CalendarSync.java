@@ -168,6 +168,7 @@ public class CalendarSync {
         if (outboxRepository.insertIfAbsent(
                 webhookEventId,
                 NoteService.EVENT_CALENDAR_SYNC_REQUESTED,
+                lineUserId,
                 payload,
                 OutboxEvent.dedupeKeyFor(
                         NoteService.EVENT_CALENDAR_SYNC_REQUESTED, webhookEventId)) == 0) {
@@ -212,6 +213,7 @@ public class CalendarSync {
         outboxRepository.insertIfAbsent(
                 webhookEventId,
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                lineUserId,
                 // 說明性的回覆是對按鈕的即時反應，token 一定還活著——這一則是免費的。
                 serializePush(PushTextPayload.plain(lineUserId, text).repliedWith(replyToken)),
                 "CALENDAR_NOTICE:" + webhookEventId);
@@ -238,6 +240,7 @@ public class CalendarSync {
         outboxRepository.save(OutboxEvent.pending(
                 aggregateId,
                 NoteService.EVENT_CALENDAR_SYNC_REQUESTED,
+                lineUserId,
                 // anchorMessageId 為 null＝安靜地做。使用者剛剛才收到一份調整後的清單，
                 // 再推一則「行事曆也更新了」只是噪音，而且每則都在吃免費額度。
                 serialize(new CalendarSyncPayload(

@@ -109,7 +109,7 @@ class MultiOpCommandTest {
                 .thenAnswer(inv -> List.copyOf(extraction.getItems()));
         // 沒執行過，而且這次搶到了。
         when(executionRepository.existsById(anyString())).thenReturn(false);
-        when(executionRepository.insertIfAbsent(anyString())).thenReturn(1);
+        when(executionRepository.insertIfAbsent(anyString(), any())).thenReturn(1);
         when(calendarCapability.canImportDirectly(anyString())).thenReturn(true);
     }
 
@@ -177,7 +177,7 @@ class MultiOpCommandTest {
     @Test
     @DisplayName("第三段搶輸了（別人已經執行過這則指令）→ 一個字都不動")
     void skipsEverythingWhenAnotherRunAlreadyExecuted() {
-        when(executionRepository.insertIfAbsent(anyString())).thenReturn(0);
+        when(executionRepository.insertIfAbsent(anyString(), any())).thenReturn(0);
 
         execute(delete(1));
 

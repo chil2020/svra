@@ -204,7 +204,7 @@ class OutboxPollerIntegrationTest {
 
     private OutboxEvent save(String eventType) {
         return outboxRepository.save(OutboxEvent.pending(
-                UUID.randomUUID().toString(), eventType, "{}"));
+                UUID.randomUUID().toString(), eventType, "U-test", "{}"));
     }
 
     private OutboxEvent reload(OutboxEvent event) {
@@ -283,7 +283,7 @@ class OutboxPollerIntegrationTest {
 
         @Override
         @Transactional
-        public void handle(String payload) {
+        public void handle(long eventId, String payload) {
             calls.incrementAndGet();
             throw new OutboxPermanentFailureException("Google 授權失效（invalid_grant）");
         }
@@ -326,7 +326,7 @@ class OutboxPollerIntegrationTest {
 
         @Override
         @Transactional
-        public void handle(String payload) {
+        public void handle(long eventId, String payload) {
             throw new IllegalStateException("處理器爆了");
         }
     }
@@ -346,7 +346,7 @@ class OutboxPollerIntegrationTest {
 
         @Override
         @Transactional
-        public void handle(String payload) {
+        public void handle(long eventId, String payload) {
             callCount.incrementAndGet();
         }
 

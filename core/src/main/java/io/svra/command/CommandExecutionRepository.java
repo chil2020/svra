@@ -19,9 +19,10 @@ interface CommandExecutionRepository extends JpaRepository<CommandExecution, Str
      */
     @Modifying
     @Query(value = """
-            INSERT INTO command_executions (command_message_id)
-            VALUES (:commandMessageId)
+            INSERT INTO command_executions (command_message_id, line_user_id)
+            VALUES (:commandMessageId, :lineUserId)
             ON CONFLICT (command_message_id) DO NOTHING
             """, nativeQuery = true)
-    int insertIfAbsent(@Param("commandMessageId") String commandMessageId);
+    int insertIfAbsent(@Param("commandMessageId") String commandMessageId,
+            @Param("lineUserId") String lineUserId);
 }

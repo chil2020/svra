@@ -67,7 +67,7 @@ class CalendarSyncHandler implements OutboxEventHandler {
     }
 
     @Override
-    public void handle(String payload) {
+    public void handle(long eventId, String payload) {
         CalendarSyncPayload sync = parse(payload);
 
         // ── 第一段：短交易，把要做什麼算出來 ──
@@ -127,6 +127,7 @@ class CalendarSyncHandler implements OutboxEventHandler {
         tx.executeWithoutResult(status -> outboxRepository.insertIfAbsent(
                 sync.cardId() == null ? "calendar-sync" : sync.cardId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                sync.lineUserId(),
                 serialize(PushTextPayload.plain(sync.lineUserId(), text)),
                 "CALENDAR_FAILED:" + sync.requestId()));
         log.info("已寫下行事曆同步失敗的通知");
@@ -214,6 +215,7 @@ class CalendarSyncHandler implements OutboxEventHandler {
         if (outboxRepository.insertIfAbsent(
                 sync.cardId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                sync.lineUserId(),
                 serialize(notifier.calendarSyncedCard(sync.lineUserId(), sync.cardId())
                         .repliedWith(sync.replyToken())),
                 "CALENDAR_REPLY:" + sync.requestId()) == 0) {

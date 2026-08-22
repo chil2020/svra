@@ -22,6 +22,18 @@ class CommandExecution {
     @Column(name = "command_message_id", length = 64, updatable = false)
     private String commandMessageId;
 
+    /**
+     * 誰下的這則指令。
+     *
+     * <p>🔴 <b>純粹是為了「出事時查得到」，執行邏輯完全用不到它。</b>
+     * 這張表原本只有一個 message id，所以「這個使用者下過哪些指令」是查不到的
+     * ——實測 11 筆執行紀錄，一筆都對不回任何東西。
+     *
+     * <p>可為 null：這一欄是後來加的，而舊資料沒有任何來源可以回填。
+     */
+    @Column(name = "line_user_id", length = 64, updatable = false)
+    private String lineUserId;
+
     /** 由資料庫的預設值填。這裡只讀不寫，所以標成不可插入。 */
     @Column(name = "executed_at", nullable = false, insertable = false, updatable = false)
     private Instant executedAt;
@@ -35,5 +47,9 @@ class CommandExecution {
 
     Instant getExecutedAt() {
         return executedAt;
+    }
+
+    String getLineUserId() {
+        return lineUserId;
     }
 }
