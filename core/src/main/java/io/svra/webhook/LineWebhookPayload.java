@@ -13,8 +13,14 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record LineWebhookPayload(List<Event> events) {
 
+    /**
+     * @param webhookEventId LINE 給每個事件的 id。<b>重送時不變</b>，
+     *                       所以它是 postback 這條路唯一的冪等鍵——
+     *                       postback 沒有 message id，而語音與文字指令用的是那個
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Event(String type, Source source, Message message) {
+    public record Event(String type, String webhookEventId, Source source, Message message,
+            Postback postback) {
 
         /** 文字訊息＝使用者在下指令（刪除、修改行程等）。 */
         public boolean isTextMessage() {
@@ -23,6 +29,22 @@ public record LineWebhookPayload(List<Event> events) {
 
         public boolean isAudioMessage() {
             return isMessageOfType("audio");
+        }
+
+        /**
+         * 使用者按了訊息卡片上的按鈕。
+         *
+         * <p>{@code source} 與 {@code webhookEventId} 一起檢查，理由同
+         * {@link #isMessageOfType}：少了任一個，後面就是一個 NPE，
+         * 而 NPE 會讓 webhook 回 500、讓 LINE 重送、然後再爆一次。
+         */
+        public boolean isPostback() {
+            return "postback".equals(type)
+                    && postback != null
+                    && postback.data() != null
+                    && source != null
+                    && source.userId() != null
+                    && webhookEventId != null;
         }
 
         /**
@@ -49,5 +71,15 @@ public record LineWebhookPayload(List<Event> events) {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Message(String id, String type, String text, String quotedMessageId) {
+    }
+
+    /**
+     * 按鈕帶回來的東西。
+     *
+     * <p>只有 {@code data}——LINE <b>不會</b>告訴我們那顆按鈕在哪一則訊息上，
+     * 所以「這張卡列了哪幾筆」必須自己塞進 data 裡（見 V10 與 {@code CardRenderer}）。
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Postback(String data) {
     }
 }

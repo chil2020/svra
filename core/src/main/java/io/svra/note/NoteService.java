@@ -28,6 +28,14 @@ public class NoteService {
      * 而不必在交易中間打 LINE。
      */
     public static final String EVENT_PUSH_TEXT_REQUESTED = "PUSH_TEXT_REQUESTED";
+    /**
+     * 「把這幾筆的狀態同步到 Google 行事曆」。
+     *
+     * <p>兩個來源共用同一個型別：使用者按下卡片上的匯入鈕，以及指令改動了
+     * 已經匯入過的項目。兩者要做的事一樣（寫進去或刪掉），差別只在
+     * 「完成後要不要回覆使用者」，而那是 payload 的欄位，不是另一種事件。
+     */
+    public static final String EVENT_CALENDAR_SYNC_REQUESTED = "CALENDAR_SYNC_REQUESTED";
 
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;

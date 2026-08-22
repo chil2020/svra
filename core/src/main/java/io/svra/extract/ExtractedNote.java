@@ -30,18 +30,35 @@ import io.svra.note.NoteCategory;
 record ExtractedNote(List<Item> items) {
 
     /**
-     * @param category  TODO 待辦｜IDEA 想法｜SCHEDULE 行程
-     * @param title     一句話摘要，不超過 30 字
-     * @param occursAt  ISO-8601 日期時間；想法類或沒提到時間時為 null。
-     *                  <b>這是「事情發生的時間」，不是收到訊息的時間</b>——
-     *                  後者是 {@code notes.created_at}，而且它只當推算的基準
-     * @param detail    補充內容，沒有就 null
-     * @param tags      主題標籤，例如 旅遊、財務、健康
+     * @param category      TODO 待辦｜IDEA 想法｜SCHEDULE 行程
+     * @param title         一句話摘要，不超過 30 字
+     * @param occursAt      ISO-8601 日期時間；想法類或沒提到時間時為 null。
+     *                      <b>這是「事情發生的時間」，不是收到訊息的時間</b>——
+     *                      後者是 {@code notes.created_at}，而且它只當推算的基準
+     * @param timeSpecified 使用者<b>有沒有真的講出幾點</b>。
+     *                      <p>🔴 這個欄位存在是因為 {@code occursAt} 有兩種來源：
+     *                      使用者說「三點開會」，和使用者只說「星期三要開會」而
+     *                      規則補上了當天 09:00。<b>存進資料庫之後那兩者長得一模一樣。</b>
+     *                      <p>推播成清單時分不出來沒關係（都印 09:00，看得懂），
+     *                      但匯進 Google 行事曆時它們是兩種不同的事件：前者是
+     *                      {@code start.dateTime} 的定時事件，後者該是
+     *                      {@code start.date} 的全天事件。猜錯的代價是行事曆裡
+     *                      多出一排根本不存在的早上九點會議（見決策 26）。
+     *                      <p>沒有 occursAt 時無意義，填 null
+     * @param detail        補充內容，沒有就 null
+     * @param tags          主題標籤，例如 旅遊、財務、健康
      */
     public record Item(
             NoteCategory category,
             String title,
             @JsonProperty(required = false) String occursAt,
+            // 🔴 這一欄**刻意維持必填**，而那是量出來的（決策 25 的第二個實例）。
+            // 標成選填之後，模型在單筆案例上直接不填它——eval 從 8/9 掉到 6/9，
+            // 三題都敗在「timeSpecified 是 null」。它不是答錯，是<b>沒有回答</b>：
+            // schema 說可以省略，那就省略。
+            // 跟 occursAt 不同的是，這一欄沒有「合法的沒有值」——只要有時間，
+            // 「那個時刻是不是使用者講的」就一定有答案。
+            Boolean timeSpecified,
             String detail,
             List<String> tags) {
     }

@@ -36,9 +36,13 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     @Override
     public void handle(String payload) {
         PushTextPayload push = objectMapper.readValue(payload, PushTextPayload.class);
-        String lineMessageId = pushClient.pushText(push.lineUserId(), push.text());
+        // 卡片與純文字走同一種事件：差別只在「這則訊息長什麼樣」，
+        // 而那是 payload 的內容，不是另一種意圖。
+        String lineMessageId = push.isCard()
+                ? pushClient.pushFlex(push.lineUserId(), push.text(), push.flexJson())
+                : pushClient.pushText(push.lineUserId(), push.text());
         // 只有推出去之後才拿得到 messageId，錨點也只能在這裡記——
         // 少了它，使用者引用這則回覆再改一次就會對不上（見 MessageAnchors）。
-        anchors.record(lineMessageId, push.lineUserId(), push.anchoredItemIds());
+        anchors.record(lineMessageId, push.cardId(), push.lineUserId(), push.anchoredItemIds());
     }
 }

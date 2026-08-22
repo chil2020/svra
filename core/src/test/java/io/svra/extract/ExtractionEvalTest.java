@@ -17,11 +17,13 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import io.svra.IntegrationTest;
 import io.svra.note.NoteItem;
 
 /**
@@ -34,12 +36,41 @@ import io.svra.note.NoteItem;
  *
  * <p>存在的理由：改 prompt、換模型、升級框架，對抽取品質的影響看不出來，
  * 除非有一組固定的題目量著。
+ *
+ * <p><b>Redis 刻意<u>不</u>換成容器</b>，跟 Postgres 與佇列相反。抽取結果的快取鍵含
+ * {@code PROMPT_VERSION}（見 {@code ExtractionCacheKeyGenerator}），所以同一版 prompt
+ * 重跑會直接命中——一輪 eval 從 70 秒變成 3 秒。那個快取<b>就是要跨執行共用</b>，
+ * 換成拋棄式容器等於把它關掉。
+ *
+ * <p>兩者的差別在於<b>會不會弄髒別人的東西</b>：快取寫進去只是快取，
+ * 而 outbox 送出去的是推播給使用者的真實訊息。
  */
 @Tag("eval")
 @SpringBootTest
+// 🔴 Testcontainers 不是為了「測得更真」，是為了<b>不要碰到正式資料</b>。
+//
+// 這支測試原本沒有這一行，於是 @SpringBootTest 用的是 application.yml 的預設值——
+// 也就是 jdbc:postgresql://localhost:5432/svra，**開發者真正在用的那顆資料庫**。
+// 症狀不是失敗，是靜悄悄地成功：2026-08-22 那次 eval 直接把 V8/V9/V10 三支
+// migration 套用到了正式資料上，而沒有任何人要求它這麼做。
+@Import(IntegrationTest.class)
 @TestPropertySource(properties = {
+        // 🔴 下面這兩行擋的是比 migration 嚴重得多的事。
+        //
+        // @SpringBootTest 啟的是**整個應用**，包含 OutboxPoller 與 RabbitMQ listener。
+        // 而 Testcontainers 只換掉 Postgres：佇列與 Redis 的預設值仍然指向 localhost，
+        // 也就是**真的那一套**。不擋的話，跑一次 eval 會：
+        //
+        //   ・讓 poller 去撈真的 outbox，把待送事件送出去（真的推播給使用者）
+        //   ・讓 listener 去消費真的 transcribe.result，把別人的轉錄結果吃掉
+        //
+        // 而 eval 要跑 70 秒以上，那是很寬的一個窗。
+        // 上一次沒出事，只是因為當下 outbox 剛好是空的——那是運氣，不是設計。
+        "svra.outbox.poll-interval-ms=3600000",
+        "spring.rabbitmq.listener.simple.auto-startup=false",
         // LineProperties 現在是 @NotBlank，少了會啟動失敗（決策 22）。
         // eval 只呼叫 LLM，不碰 LINE，給值只是為了讓 context 起得來。
+        // 行事曆的白名單留空，所以憑證可以是假的也不會被驗（決策 27）。
         "svra.line.channel-secret=eval-secret",
         "svra.line.channel-access-token=eval-token",
 })
@@ -119,17 +150,26 @@ class ExtractionEvalTest {
         // ── 逐項比對。用「分類 + 關鍵字」配對，不做逐字比對——
         //    同一段話有多種合理的整理方式，逐字比對只會逼人去對齊模型的表達習慣。
         for (JsonNode want : expected.path("items")) {
-            String category = want.get("category").asString();
+            // 🔴 category 可以省略，而那不是偷懶。
+            //
+            // SCHEDULE 與 TODO 的界線本來就模糊：「星期五要交季報」判成哪一邊都說得通。
+            // 有些案例真正要驗的是別的東西（例如時間精度），這時硬釘一個分類，
+            // 測到的是「模型的分類習慣跟不跟我一樣」，而不是那個案例的重點。
+            //
+            // 產品端也是同一個判斷：匯入行事曆的閘門是「有沒有時間」而不是分類（決策 26），
+            // 所以這裡也不該把分類當成必然。
+            String category = want.has("category") ? want.get("category").asString() : null;
             List<String> keywords = new ArrayList<>();
             want.path("mustMention").forEach(k -> keywords.add(k.asString()));
 
             NoteItem match = actual.stream()
-                    .filter(i -> i.getCategory().name().equals(category))
+                    .filter(i -> category == null || i.getCategory().name().equals(category))
                     .filter(i -> keywords.isEmpty() || keywords.stream().anyMatch(k -> text(i).contains(k)))
                     .findFirst().orElse(null);
 
             if (match == null) {
-                failures.add("找不到 %s 且提到 %s 的項目".formatted(category, keywords));
+                failures.add("找不到 %s且提到 %s 的項目"
+                        .formatted(category == null ? "" : category + " ", keywords));
                 continue;
             }
 
@@ -141,6 +181,19 @@ class ExtractionEvalTest {
                 String exp = wantAt.isNull() ? null : wantAt.asString();
                 if (exp == null ? got != null : !exp.equals(got)) {
                     failures.add("「%s」的時間是 %s，預期 %s".formatted(match.getTitle(), got, exp));
+                }
+            }
+
+            // 🔴 時間精度：09:00 是使用者講的，還是規則補的。
+            //    這一欄決定匯進行事曆時是定時事件還是全天事件（決策 26），
+            //    而它跟 occursAt 一樣是模型判的——沒有 eval 守著就是在賭。
+            if (want.has("timeSpecified")) {
+                JsonNode wantFlag = want.get("timeSpecified");
+                Boolean got = match.getTimeSpecified();
+                Boolean exp = wantFlag.isNull() ? null : wantFlag.asBoolean();
+                if (exp == null ? got != null : !exp.equals(got)) {
+                    failures.add("「%s」的 timeSpecified 是 %s，預期 %s"
+                            .formatted(match.getTitle(), got, exp));
                 }
             }
 

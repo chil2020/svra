@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.svra.LogContext;
+import io.svra.calendar.CalendarSync;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
 
@@ -31,10 +32,13 @@ public class LineWebhookController {
 
     private final NoteService noteService;
     private final NoteCommandService commandService;
+    private final CalendarSync calendarSync;
 
-    public LineWebhookController(NoteService noteService, NoteCommandService commandService) {
+    public LineWebhookController(NoteService noteService, NoteCommandService commandService,
+            CalendarSync calendarSync) {
         this.noteService = noteService;
         this.commandService = commandService;
+        this.calendarSync = calendarSync;
     }
 
     /**
@@ -88,15 +92,28 @@ public class LineWebhookController {
                     event.message().id(),
                     event.message().text(),
                     event.message().quotedMessageId());
+        } else if (event.isPostback()) {
+            // 卡片上的按鈕。跟語音與指令一樣只寫意圖，真正呼叫 Google 的是 poller——
+            // 「全部加入」可能是好幾次 HTTP 呼叫，而 webhook 不能做慢事（決策 1）。
+            //
+            // data 的格式不在這裡解析：那是 calendar 模組自己的事，
+            // 多一種按鈕時 webhook 不必跟著改。
+            if (!calendarSync.handlePostback(event.source().userId(),
+                    event.webhookEventId(), event.postback().data())) {
+                log.debug("不認識的 postback，忽略");
+            }
         } else {
             // 貼圖、加好友、已讀……收得下但不處理。看得到才知道「沒反應」是預期的。
             log.debug("不處理的事件型別：type={}", event.type());
         }
     }
 
-    /** 事件不一定帶得到 message id（非訊息事件），拿不到就讓 MDC 留空。 */
+    /**
+     * 關聯 id：訊息事件用 LINE 的 message id，postback 沒有那個東西，
+     * 退而用 {@code webhookEventId}——它也是那條路的冪等鍵，log 與資料對得起來。
+     */
     private static String eventMessageId(LineWebhookPayload.Event event) {
-        return event.message() == null ? null : event.message().id();
+        return event.message() != null ? event.message().id() : event.webhookEventId();
     }
 
     private static long elapsedMillis(long startedNanos) {

@@ -54,6 +54,12 @@ import static org.mockito.Mockito.when;
 @TestPropertySource(properties = {
         "svra.outbox.poll-interval-ms=3600000",
         "spring.rabbitmq.listener.simple.auto-startup=false",
+        // 行事曆的設定跟 LINE 的一樣是 @NotBlank，少了就起不來（決策 8 的一貫做法）。
+        // 這裡填假的：整合測試不會真的打 Google。
+        "svra.calendar.client-id=test-client",
+        "svra.calendar.client-secret=test-secret",
+        "svra.calendar.refresh-token=test-refresh-token",
+        "svra.calendar.calendar-id=test@group.calendar.google.com",
         "svra.line.channel-secret=integration-test-secret",
         "svra.line.channel-access-token=integration-test-token",
 })
@@ -121,7 +127,7 @@ class CommandIdempotencyIntegrationTest {
     /** 讓 mock 的 parser 一律回「刪掉第一筆」——位置性正是這裡要測的東西。 */
     private void deleteFirstItem() {
         when(parser.parse(any(), any())).thenReturn(new NoteCommand(
-                List.of(new NoteCommand.Op(NoteCommand.Action.DELETE, 1, null, null, null)),
+                List.of(new NoteCommand.Op(NoteCommand.Action.DELETE, 1, null, null, null, null)),
                 null, null));
     }
 
@@ -142,7 +148,7 @@ class CommandIdempotencyIntegrationTest {
     }
 
     private static NoteItem item(String title) {
-        return new NoteItem(NoteCategory.TODO, title, null, null, List.of());
+        return new NoteItem(NoteCategory.TODO, title, null, null, null, List.of());
     }
 
     private List<String> titlesOf(Long extractionId) {

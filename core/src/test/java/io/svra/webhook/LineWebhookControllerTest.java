@@ -9,12 +9,15 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import io.svra.calendar.CalendarSync;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,6 +41,9 @@ class LineWebhookControllerTest {
 
     @MockitoBean
     private NoteCommandService commandService;
+
+    @MockitoBean
+    private CalendarSync calendarSync;
 
     /** 保留幾個不使用的欄位，驗證寬鬆解析。 */
     private static final String AUDIO_EVENT_BODY = """
@@ -89,6 +95,54 @@ class LineWebhookControllerTest {
                 }]}""").andExpect(status().isOk());
 
         verify(commandService).recordCommand("U4af4980629", "999", "改成三點", "888");
+    }
+
+    @Test
+    @DisplayName("卡片按鈕 → 交給 calendar，並帶著 webhookEventId（那是它唯一的冪等鍵）")
+    void postbackIsHandedToCalendarSync() throws Exception {
+        postWebhook("""
+                {"events":[{
+                  "type":"postback",
+                  "replyToken":"rt-abc",
+                  "webhookEventId":"01HXPOSTBACK",
+                  "source":{"type":"user","userId":"U4af4980629"},
+                  "postback":{"data":"a=cal&c=abc123&i=*"}
+                }]}""").andExpect(status().isOk());
+
+        // postback 沒有 message id，冪等只能靠 webhookEventId——它在重送時不變。
+        // 傳錯或漏傳的話，逾時重送就會讓使用者收到兩則「已加入行事曆」。
+        verify(calendarSync).handlePostback("U4af4980629", "01HXPOSTBACK", "a=cal&c=abc123&i=*");
+        verify(commandService, never())
+                .recordCommand(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("postback 少了 webhookEventId → 收得下但不處理，不是爆掉")
+    void postbackWithoutWebhookEventIdIsIgnored() throws Exception {
+        // 沒有它就沒有冪等鍵。硬做下去的話，一次逾時重送就是重複執行——
+        // 而回 500 只會讓 LINE 再送一次同樣缺欄位的東西（決策 1）。
+        postWebhook("""
+                {"events":[{
+                  "type":"postback",
+                  "source":{"type":"user","userId":"U4af4980629"},
+                  "postback":{"data":"a=cal&c=abc123&i=*"}
+                }]}""").andExpect(status().isOk());
+
+        verify(calendarSync, never()).handlePostback(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("不是我們的 postback → calendar 說不認識，webhook 照樣回 200")
+    void unknownPostbackStillReturns200() throws Exception {
+        when(calendarSync.handlePostback(anyString(), anyString(), anyString())).thenReturn(false);
+
+        postWebhook("""
+                {"events":[{
+                  "type":"postback",
+                  "webhookEventId":"01HOTHER",
+                  "source":{"type":"user","userId":"U4af4980629"},
+                  "postback":{"data":"action=somethingElse"}
+                }]}""").andExpect(status().isOk());
     }
 
     @Test

@@ -20,8 +20,14 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import tools.jackson.databind.json.JsonMapper;
 
+import io.svra.calendar.CalendarSync;
+import io.svra.calendar.CalendarSyncPayload;
+import io.svra.line.LinePushClient;
 import io.svra.llm.LlmRateLimiter;
+import io.svra.notify.CalendarCapability;
+import io.svra.notify.CardRenderer;
 import io.svra.notify.MessageAnchors;
+import io.svra.notify.NoteNotifier;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
 import io.svra.note.NoteExtractionRepository;
@@ -34,6 +40,7 @@ import io.svra.outbox.OutboxEventRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,6 +67,11 @@ class MultiOpCommandTest {
     private final JsonMapper objectMapper = JsonMapper.builder().build();
     @Mock LlmRateLimiter rateLimiter;
     @Mock MessageAnchors anchors;
+    /** 行事曆連動另外測——這裡要驗的是指令本身的行為。 */
+    @Mock CalendarSync calendarSync;
+    @Mock LinePushClient pushClient;
+    /** 這裡的使用者當成授權過的——行事曆連動正是這些測試在驗的東西。 */
+    @Mock CalendarCapability calendarCapability;
     @Mock PlatformTransactionManager transactionManager;
 
     private NoteCommandService service;
@@ -67,11 +79,17 @@ class MultiOpCommandTest {
 
     @BeforeEach
     void setUp() {
+        // notifier 用真的：回覆的內容（「已更新」vs「目前還有這些」、列了哪幾筆）
+        // 正是這些測試在驗的東西，換成 mock 就等於驗一個 stub。
+        NoteNotifier notifier = new NoteNotifier(noteRepository, extractionRepository,
+                itemRepository, pushClient, anchors,
+                new CardRenderer(objectMapper, calendarCapability));
+
         service = new NoteCommandService(noteRepository, extractionRepository, itemRepository,
                 executionRepository,
                 Clock.fixed(Instant.parse("2026-08-18T09:00:00Z"), ZoneId.of("Asia/Taipei")),
-                parser, outboxRepository, objectMapper, rateLimiter, anchors,
-                transactionManager);
+                parser, outboxRepository, objectMapper, rateLimiter, anchors, notifier,
+                calendarSync, transactionManager);
 
         extraction = NoteExtraction.of(1L, "raw", "v-test");
         // id 平常由資料庫給。少了它，指令會以為「引用沒對到」而退回整體清單。
@@ -90,6 +108,7 @@ class MultiOpCommandTest {
         // 沒執行過，而且這次搶到了。
         when(executionRepository.existsById(anyString())).thenReturn(false);
         when(executionRepository.insertIfAbsent(anyString())).thenReturn(1);
+        when(calendarCapability.canImportDirectly(anyString())).thenReturn(true);
     }
 
     /**
@@ -97,7 +116,7 @@ class MultiOpCommandTest {
      * （編號 → 快照 id → 資料庫那一筆），少了它測到的會是另一條路。
      */
     private static NoteItem item(Long id, String title) {
-        NoteItem item = new NoteItem(NoteCategory.TODO, title, null, null, List.of());
+        NoteItem item = new NoteItem(NoteCategory.TODO, title, null, null, null, List.of());
         ReflectionTestUtils.setField(item, "id", id);
         return item;
     }
@@ -114,7 +133,7 @@ class MultiOpCommandTest {
     }
 
     private static NoteCommand.Op delete(int index) {
-        return new NoteCommand.Op(NoteCommand.Action.DELETE, index, null, null, null);
+        return new NoteCommand.Op(NoteCommand.Action.DELETE, index, null, null, null, null);
     }
 
     @Test
@@ -133,7 +152,7 @@ class MultiOpCommandTest {
         when(noteRepository.findTopByLineUserIdOrderByIdDesc(USER_ID)).thenReturn(Optional.empty());
 
         execute(delete(2),
-                new NoteCommand.Op(NoteCommand.Action.ADD, null, "新的一筆", null, "TODO"));
+                new NoteCommand.Op(NoteCommand.Action.ADD, null, "新的一筆", null, null, "TODO"));
 
         assertThat(extraction.getItems())
                 .extracting(NoteItem::getTitle)
@@ -203,7 +222,7 @@ class MultiOpCommandTest {
         when(anchors.itemIdsFor(anyString())).thenReturn(Optional.empty());
 
         executeQuoting("unknown-message",
-                new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null));
+                new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null, null));
 
         assertThat(replyPayload()).contains("目前還有這些");
     }
@@ -245,12 +264,111 @@ class MultiOpCommandTest {
     @Test
     @DisplayName("只是要看清單 → 說「目前還有這些」，不能說「已更新」")
     void listOnlyDoesNotClaimAnUpdate() {
-        execute(new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null));
+        execute(new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null, null));
 
         assertThat(replyPayload())
                 .as("什麼都沒改卻說已更新，就是宣稱一件沒發生的事")
                 .contains("目前還有這些")
                 .doesNotContain("已更新");
+    }
+
+    // ── 行事曆連動（決策 26）──────────────────────────────────────────
+
+    @Test
+    @DisplayName("🔴 刪掉已匯入的項目 → 同步意圖要<b>自帶</b> event id")
+    void deletingAnImportedItemCarriesTheEventIdInTheIntent() {
+        NoteItem imported = importedItem(4L, "已匯入的行程", "svra0000000000004");
+        extraction.addItem(imported);
+
+        // 🔴 編號 1 而不是 4：三筆基底是 TODO，而 NoteCategory.itemOrder()
+        // 把 SCHEDULE 排在最前面。編號是「顯示順序」不是「加入順序」——
+        // 這件事有 ItemNumberingConsistencyTest 專門守著。
+        execute(delete(1));
+
+        // orphanRemoval 一提交那一列就沒了，poller 兩秒後撿起事件時已經無從回查。
+        // 意圖必須自足，這正是決策 3「先寫意圖」的字面意思。
+        assertThat(calendarTargets())
+                .containsExactly(CalendarSyncPayload.Target.delete("svra0000000000004"));
+    }
+
+    @Test
+    @DisplayName("刪掉沒匯入過的項目 → 完全不寫同步意圖")
+    void deletingANeverImportedItemQueuesNothing() {
+        execute(delete(1));
+
+        // 行事曆上本來就沒有它。寫下去只是製造註定 404 的請求，
+        // 而 404 會被判成永久失敗、推一則假的失敗通知給使用者。
+        verify(calendarSync).syncAfterCommand(anyString(), anyString(), eq(List.of()));
+    }
+
+    @Test
+    @DisplayName("改已匯入項目的時間 → 寫一筆 UPSERT，讓行事曆跟著動")
+    void reschedulingAnImportedItemQueuesAnUpsert() {
+        NoteItem imported = importedItem(4L, "已匯入的行程", "svra0000000000004");
+        extraction.addItem(imported);
+
+        // 編號 1：SCHEDULE 排在三筆 TODO 前面（見上面那則測試的說明）
+        execute(new NoteCommand.Op(NoteCommand.Action.UPDATE_TIME, 1, null,
+                "2026-08-25T15:00:00+08:00", true, null));
+
+        assertThat(calendarTargets())
+                .containsExactly(CalendarSyncPayload.Target.upsert(4L));
+        assertThat(imported.getOccursAt()).isEqualTo(Instant.parse("2026-08-25T07:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("改標題也要同步——行事曆上的 summary 就是標題")
+    void renamingAnImportedItemQueuesAnUpsert() {
+        NoteItem imported = importedItem(4L, "舊標題", "svra0000000000004");
+        extraction.addItem(imported);
+
+        execute(new NoteCommand.Op(NoteCommand.Action.UPDATE_TITLE, 1, "新標題",
+                null, null, null));
+
+        assertThat(calendarTargets()).containsExactly(CalendarSyncPayload.Target.upsert(4L));
+    }
+
+    @Test
+    @DisplayName("新增的項目不會自動進行事曆——使用者沒按過那顆按鈕")
+    void addedItemsAreNotSilentlyPushedToTheCalendar() {
+        execute(new NoteCommand.Op(NoteCommand.Action.ADD, null, "新的一筆",
+                "2026-08-25T15:00:00+08:00", true, "SCHEDULE"));
+
+        verify(calendarSync).syncAfterCommand(anyString(), anyString(), eq(List.of()));
+    }
+
+    @Test
+    @DisplayName("🔴 只講日期的改期，不該把定時事件變成全天事件")
+    void reschedulingWithoutAClockKeepsTheOriginalPrecision() {
+        NoteItem imported = importedItem(4L, "三點那筆", "svra0000000000004");
+        extraction.addItem(imported);
+
+        // 「改到下週三」——沒講幾點，所以模型回 timeSpecified=false，
+        // 而 prompt 要它沿用原本的時刻。時刻既然是沿用的，精度也該沿用。
+        execute(new NoteCommand.Op(NoteCommand.Action.UPDATE_TIME, 1, null,
+                "2026-08-26T15:00:00+08:00", false, null));
+
+        assertThat(imported.getTimeSpecified())
+                .as("一律填 false 的話，使用者從沒要求過的「變成全天事件」就發生了")
+                .isTrue();
+    }
+
+    /** 一筆有時間、而且已經匯進行事曆的項目。 */
+    private static NoteItem importedItem(Long id, String title, String googleEventId) {
+        NoteItem item = new NoteItem(NoteCategory.SCHEDULE, title,
+                Instant.parse("2026-08-20T01:00:00Z"), true, null, List.of());
+        ReflectionTestUtils.setField(item, "id", id);
+        item.markCalendarEvent(googleEventId);
+        return item;
+    }
+
+    /** 這一輪交給 calendar 模組的同步意圖。 */
+    @SuppressWarnings("unchecked")
+    private List<CalendarSyncPayload.Target> calendarTargets() {
+        ArgumentCaptor<List<CalendarSyncPayload.Target>> captor =
+                ArgumentCaptor.forClass(List.class);
+        verify(calendarSync).syncAfterCommand(anyString(), anyString(), captor.capture());
+        return captor.getValue();
     }
 
     /** 這一輪寫進 outbox 的回覆內容。回覆改由 outbox 送出之後，驗的是它而不是 push。 */

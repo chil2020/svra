@@ -33,14 +33,20 @@ public class MessageAnchors {
      * 記下一則剛送出去的清單訊息。
      *
      * <p>推播失敗時拿不到 messageId，那則訊息也不存在，沒有東西要錨——直接跳過。
+     *
+     * @param cardId 這則訊息若是 Flex 卡片，就是卡片上按鈕帶的那個 id；
+     *               純文字訊息沒有按鈕，給 null
      */
     @Transactional
-    public void record(String lineMessageId, String lineUserId, List<Long> itemIds) {
+    public void record(String lineMessageId, String cardId, String lineUserId,
+            List<Long> itemIds) {
         if (lineMessageId == null || itemIds.isEmpty()) {
             return;
         }
-        repository.save(new MessageAnchor(lineMessageId, lineUserId, itemIds, Instant.now(clock)));
-        log.debug("已記下訊息錨點：lineMessageId={} 項目數={}", lineMessageId, itemIds.size());
+        repository.save(new MessageAnchor(
+                lineMessageId, cardId, lineUserId, itemIds, Instant.now(clock)));
+        log.debug("已記下訊息錨點：lineMessageId={} cardId={} 項目數={}",
+                lineMessageId, cardId, itemIds.size());
     }
 
     /**
@@ -49,5 +55,20 @@ public class MessageAnchors {
     @Transactional(readOnly = true)
     public Optional<List<Long>> itemIdsFor(String lineMessageId) {
         return repository.findById(lineMessageId).map(MessageAnchor::getItemIds);
+    }
+
+    /**
+     * 卡片上的按鈕被按下時，反查那張卡當時列了哪幾筆。
+     *
+     * <p>跟 {@link #itemIdsFor} 查的是同一列，只是換一把鑰匙——
+     * 引用回覆帶的是 LINE 的 message id，按鈕帶的是我們自己給的卡片 id
+     * （為什麼要兩把，見 V10）。
+     *
+     * @return 對不上時為空。卡片可能是重啟前的舊版本，或資料已經被清掉
+     */
+    @Transactional(readOnly = true)
+    public Optional<List<Long>> itemIdsForCard(String cardId) {
+        return repository.findFirstByCardIdOrderByCreatedAtDesc(cardId)
+                .map(MessageAnchor::getItemIds);
     }
 }

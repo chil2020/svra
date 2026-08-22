@@ -36,6 +36,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(IntegrationTest.class)
 @TestPropertySource(properties = {
+        // 行事曆的設定跟 LINE 的一樣是 @NotBlank，少了就起不來（決策 8 的一貫做法）。
+        // 這裡填假的：整合測試不會真的打 Google。
+        "svra.calendar.client-id=test-client",
+        "svra.calendar.client-secret=test-secret",
+        "svra.calendar.refresh-token=test-refresh-token",
+        "svra.calendar.calendar-id=test@group.calendar.google.com",
         "svra.line.channel-secret=test-secret",
         "svra.line.channel-access-token=dummy-token",
         // actuator 走獨立埠，才測得到「換了埠也一樣吃 security」這件事

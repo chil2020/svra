@@ -92,6 +92,29 @@ svra:
     # 唯一那個推論資源。
     rate-limit: 30
     rate-limit-window: 1m
+  calendar:
+    # 🔴 誰可以讓後端「直接」寫進他的行事曆（決策 27）。
+    #
+    # 空的＝所有人走預填連結：不需要 OAuth、不受 Google 的 100 人終身上限與
+    # 4-6 週審核限制，下面四個憑證也可以整個留白。
+    # 有人＝那些人的卡片會長出 postback 按鈕（一鍵整批 + 改了會連動），
+    # 而此時憑證沒填齊會**啟動失敗**——因為那個組合一定是壞的。
+    #
+    # 逗號分隔，例如 CALENDAR_OAUTH_USER_IDS=U4af4980629,U0123456789
+    oauth-user-ids: ${CALENDAR_OAUTH_USER_IDS:}
+    # GCP → APIs & Services → Credentials，建一個「Desktop app」類型的 OAuth client。
+    # 🔴 consent screen 一定要按 Publish app 切到 In Production：
+    #    停在 Testing 的話 Google 會在七天後撤銷 refresh token（見決策 26）。
+    client-id: ${GOOGLE_CLIENT_ID:}
+    client-secret: ${GOOGLE_CLIENT_SECRET:}
+    # 由 deploy/google-calendar-auth.py 一次性取得，跑一次就好
+    refresh-token: ${GOOGLE_REFRESH_TOKEN:}
+    # 專用子行事曆，同一支腳本會建立並印出它的 id。
+    # 不用 primary：機器產生的事件跟手建的行程混在一起，抽錯時就沒有「整層關掉」這個選項。
+    calendar-id: ${GOOGLE_CALENDAR_ID:}
+    # 使用者講了幾點、但沒講多久時的長度。不讓模型猜——「開會多久」幾乎沒有人會講。
+    # 兩條路共用：同一筆行程不該因為使用者有沒有授權就變成不同長度的事件。
+    default-duration-minutes: ${CALENDAR_DEFAULT_DURATION_MINUTES:60}
   # 佇列名稱需與 whisper-worker/main.py 的 topology 一致
   mq:
     exchange: svra.direct

@@ -23,7 +23,7 @@ class NoteExtractorValidationTest {
 
     private static ExtractedNote one(NoteCategory category, String title, String occursAt) {
         return new ExtractedNote(List.of(
-                new ExtractedNote.Item(category, title, occursAt, null, List.of())));
+                new ExtractedNote.Item(category, title, occursAt, null, null, List.of())));
     }
 
     @Test

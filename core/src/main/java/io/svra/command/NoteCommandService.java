@@ -19,6 +19,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import io.svra.calendar.CalendarSync;
+import io.svra.calendar.CalendarSyncPayload;
 import io.svra.llm.LlmRateLimiter;
 import io.svra.note.NoteCategory;
 import io.svra.note.NoteExtraction;
@@ -49,6 +51,10 @@ public class NoteCommandService {
     private final LlmRateLimiter rateLimiter;
     /** 解析「第三筆」要靠使用者引用的那則訊息當時的順序，而那由 notify 記著。 */
     private final MessageAnchors anchors;
+    /** 回覆長什麼樣由 notify 決定——這裡只負責決定「要回哪一份清單」。 */
+    private final NoteNotifier notifier;
+    /** 改到已經匯入行事曆的項目時，行事曆要跟著動。 */
+    private final CalendarSync calendarSync;
     private final Clock clock;
     /** 交易邊界明寫，因為中間刻意有一段不在交易裡（見 applyCommand）。 */
     private final TransactionTemplate tx;
@@ -63,6 +69,8 @@ public class NoteCommandService {
             ObjectMapper objectMapper,
             LlmRateLimiter rateLimiter,
             MessageAnchors anchors,
+            NoteNotifier notifier,
+            CalendarSync calendarSync,
             PlatformTransactionManager transactionManager) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
@@ -73,6 +81,8 @@ public class NoteCommandService {
         this.objectMapper = objectMapper;
         this.rateLimiter = rateLimiter;
         this.anchors = anchors;
+        this.notifier = notifier;
+        this.calendarSync = calendarSync;
         this.clock = clock;
         this.tx = new TransactionTemplate(transactionManager);
     }
@@ -178,18 +188,25 @@ public class NoteCommandService {
         // 回覆與變更同交易寫下，由 outbox 送出（決策 3）。直接打 LINE 的話，
         // HTTP 成功而交易回滾時使用者會看到更新後的清單，但資料沒變。
         // 不填 dedupe_key：上面的執行紀錄已經是守衛，一則指令寫不出第二筆。
-        Reply reply = execute(payload, prepared, command);
+        Outcome outcome = execute(payload, prepared, command);
         outboxRepository.save(OutboxEvent.pending(
                 payload.commandMessageId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                toPushPayload(payload.lineUserId(), reply)));
+                serialize(outcome.reply())));
+
+        // 🔴 行事曆的連動也寫在<b>這個</b>交易裡，理由跟回覆完全一樣。
+        // 拆出去的話，指令回滾而同步意圖留下，行事曆會被改成一個資料庫裡不存在的樣子；
+        // 反過來漏寫，使用者改了時間、收到漂亮的新清單，而行事曆默默停在舊時間——
+        // 那是決策 17 講的那種失敗：只做一半，而且沒有人會發現。
+        calendarSync.syncAfterCommand(
+                payload.commandMessageId(), payload.lineUserId(), outcome.calendarTargets());
+
         log.info("指令已處理：{} 個動作", command.isUnknown() ? 0 : command.ops().size());
     }
 
-    private String toPushPayload(String lineUserId, Reply reply) {
+    private String serialize(PushTextPayload reply) {
         try {
-            return objectMapper.writeValueAsString(
-                    new PushTextPayload(lineUserId, reply.text(), reply.listedItemIds()));
+            return objectMapper.writeValueAsString(reply);
         } catch (JacksonException e) {
             throw new IllegalStateException("序列化推播 payload 失敗", e);
         }
@@ -202,9 +219,9 @@ public class NoteCommandService {
      * 要求調整，想拿回的就是那則訊息的新版本。清單本身即確認，他可以直接看結果對不對。
      * 只有<b>沒做到的事</b>才需要另外說（下面的 notices）。
      */
-    private Reply execute(CommandPayload payload, Prepared prepared, NoteCommand command) {
+    private Outcome execute(CommandPayload payload, Prepared prepared, NoteCommand command) {
         if (command.isUnknown()) {
-            return Reply.plain("🤔 " + command.reason());
+            return Outcome.plain(payload.lineUserId(), "🤔 " + command.reason());
         }
 
         // 🔴 先把編號解析成項目，再開始動手：邊刪邊用編號取值的話，
@@ -229,6 +246,9 @@ public class NoteCommandService {
         boolean listRequested = false;
         // 這次新增的還不在錨點裡，但它們該出現在「調整後」的清單上。
         List<NoteItem> added = new ArrayList<>();
+        // 已經匯入過行事曆的項目被動到時，行事曆要跟著動。沒匯入過的不在這裡面——
+        // 那些項目在 Google 那邊根本不存在，寫下同步意圖只是製造註定 404 的請求。
+        List<CalendarSyncPayload.Target> calendarTargets = new ArrayList<>();
 
         for (int i = 0; i < command.ops().size(); i++) {
             NoteCommand.Op op = command.ops().get(i);
@@ -248,15 +268,24 @@ public class NoteCommandService {
 
             switch (op.action()) {
                 case DELETE -> {
+                    // 🔴 event id 要在刪掉<b>之前</b>拿。orphanRemoval 一提交那一列就沒了，
+                    // poller 兩秒後撿起同步事件時已經無從回查——所以意圖必須自帶它（決策 3）。
+                    if (target.getGoogleEventId() != null) {
+                        calendarTargets.add(
+                                CalendarSyncPayload.Target.delete(target.getGoogleEventId()));
+                    }
                     target.getExtraction().removeItem(target);
                     changed = true;
                 }
                 case UPDATE_TITLE -> {
                     target.rename(op.title());
+                    syncIfImported(calendarTargets, target);
                     changed = true;
                 }
                 case UPDATE_TIME -> {
-                    target.reschedule(NoteCommandParser.parseOccursAt(op.occursAt()));
+                    target.reschedule(NoteCommandParser.parseOccursAt(op.occursAt()),
+                            timeSpecifiedAfter(op, target));
+                    syncIfImported(calendarTargets, target);
                     changed = true;
                 }
                 case ADD -> {
@@ -265,9 +294,12 @@ public class NoteCommandService {
                         notices.add("⚠️ 還沒有任何筆記可以加進去，先傳一則語音吧。");
                         break;
                     }
+                    // 新增的項目不會自動進行事曆：使用者沒按過那顆按鈕。
+                    // 回覆的卡片上它會帶著「加入行事曆」，要不要進去由他決定。
                     NoteItem item = new NoteItem(
                             NoteCommandParser.parseCategory(op.category()), op.title(),
-                            NoteCommandParser.parseOccursAt(op.occursAt()), null, List.of());
+                            NoteCommandParser.parseOccursAt(op.occursAt()), op.timeSpecified(),
+                            null, List.of());
                     owner.addItem(item);
                     added.add(item);
                     changed = true;
@@ -290,15 +322,47 @@ public class NoteCommandService {
 
         // 什麼都沒動、也沒要求看清單——秀一份他沒在看的清單只會更困惑，直接說原因。
         if (!changed && !listRequested) {
-            return Reply.plain(notices.isEmpty()
+            return Outcome.plain(payload.lineUserId(), notices.isEmpty()
                     ? "⚠️ 這則指令我沒能做到任何事。"
                     : String.join("\n", notices));
         }
 
         List<NoteItem> after = itemsAfterChange(payload, prepared, byId, added);
-        String list = changed ? NoteNotifier.renderUpdated(after) : NoteNotifier.renderCurrent(after);
-        String text = notices.isEmpty() ? list : String.join("\n", notices) + "\n\n" + list;
-        return new Reply(text, after.stream().map(NoteItem::getId).toList());
+        // 排版交給 notify——這裡只決定「要回哪一份清單」。
+        // 提醒（做不到的部分、引用對不上）由它排在清單前面，而不是在這裡串成一段文字：
+        // 卡片上那是獨立的一行，串起來就沒辦法分開排版了。
+        PushTextPayload reply = changed
+                ? notifier.updatedCard(payload.lineUserId(), after, notices)
+                : notifier.currentCard(payload.lineUserId(), after, notices);
+        return new Outcome(reply, calendarTargets);
+    }
+
+    /**
+     * 已經在行事曆上的項目被改了，就寫一筆同步意圖。
+     *
+     * <p>沒有 {@code googleEventId} 的不寫——那些項目在 Google 那邊根本不存在，
+     * 寫下去只是製造註定 404 的請求，而 404 會被判成永久失敗、推一則假的失敗通知。
+     */
+    private static void syncIfImported(List<CalendarSyncPayload.Target> targets, NoteItem item) {
+        if (item.getGoogleEventId() != null) {
+            targets.add(CalendarSyncPayload.Target.upsert(item.getId()));
+        }
+    }
+
+    /**
+     * 改完時間之後，「時刻是不是使用者講的」該是什麼。
+     *
+     * <p>模型說 true 就是 true——他這次講了幾點。說 false 或沒說時<b>沿用原本的值</b>，
+     * 因為 prompt 要它在「只講日期」時沿用原本那筆的時刻：<b>時刻既然是沿用的，
+     * 「時刻是不是講出來的」自然也該沿用</b>。
+     *
+     * <p>一律填 false 的話，「把三點那筆改到下週三」會讓一個定時事件變成全天事件，
+     * 而使用者從頭到尾沒有要求過那件事。
+     */
+    private static Boolean timeSpecifiedAfter(NoteCommand.Op op, NoteItem target) {
+        return Boolean.TRUE.equals(op.timeSpecified())
+                ? Boolean.TRUE
+                : target.getTimeSpecified();
     }
 
     /**
@@ -328,12 +392,17 @@ public class NoteCommandService {
         return after.stream().sorted(NoteCategory.itemOrder()).toList();
     }
 
-    /** 回覆的內容，以及它列出的項目——後者會成為這則訊息的錨點。 */
-    private record Reply(String text, List<Long> listedItemIds) {
+    /**
+     * 一則指令的兩個產物：<b>要回什麼</b>，以及<b>行事曆要跟著做什麼</b>。
+     *
+     * <p>兩者必須一起交出來，因為它們都必須寫在同一個交易裡。分兩次算的話，
+     * 中間任何一步失敗都會讓兩邊對不上。
+     */
+    private record Outcome(PushTextPayload reply, List<CalendarSyncPayload.Target> calendarTargets) {
 
-        /** 不是清單的回覆（看不懂、什麼都沒做成），沒有編號可以指涉。 */
-        static Reply plain(String text) {
-            return new Reply(text, List.of());
+        /** 不是清單的回覆（看不懂、什麼都沒做成），沒有編號可以指涉，也沒有東西要同步。 */
+        static Outcome plain(String lineUserId, String text) {
+            return new Outcome(PushTextPayload.plain(lineUserId, text), List.of());
         }
     }
 

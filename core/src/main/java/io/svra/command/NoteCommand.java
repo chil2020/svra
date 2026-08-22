@@ -48,16 +48,23 @@ record NoteCommand(List<Op> ops,
      * 而型別寫的那半份 prompt 不會出現在任何一個字串常數裡——
      * 改手寫規則改不到它，{@code CommandSchemaTest} 守著它。
      *
-     * @param itemIndex DELETE / UPDATE_* 用，清單上的編號（從 1 開始）
-     * @param title     UPDATE_TITLE 的新標題，或 ADD 的標題
-     * @param occursAt  UPDATE_TIME 的新時間，或 ADD 的時間；ISO-8601。
-     *                  <b>ADD 沒有時間是正常的</b>——使用者還沒想好什麼時候做而已
-     * @param category  ADD 用：SCHEDULE / TODO / IDEA
+     * @param itemIndex     DELETE / UPDATE_* 用，清單上的編號（從 1 開始）
+     * @param title         UPDATE_TITLE 的新標題，或 ADD 的標題
+     * @param occursAt      UPDATE_TIME 的新時間，或 ADD 的時間；ISO-8601。
+     *                      <b>ADD 沒有時間是正常的</b>——使用者還沒想好什麼時候做而已
+     * @param timeSpecified 使用者這次有沒有講出幾點。跟抽取層的同名欄位是同一件事
+     *                      （見 {@code ExtractedNote.Item}）：09:00 究竟是他說的，
+     *                      還是規則補的，決定了同步到行事曆時是定時事件還是全天事件。
+     *                      <p>UPDATE_TIME 填 false 或不填時<b>沿用那一筆原本的值</b>——
+     *                      因為上面的規則要模型在「只講日期」時沿用原本的時刻，
+     *                      時刻既然是沿用的，「時刻是不是講出來的」自然也該沿用
+     * @param category      ADD 用：SCHEDULE / TODO / IDEA
      */
     record Op(Action action,
             @JsonProperty(required = false) Integer itemIndex,
             @JsonProperty(required = false) String title,
             @JsonProperty(required = false) String occursAt,
+            @JsonProperty(required = false) Boolean timeSpecified,
             @JsonProperty(required = false) String category) {
     }
 

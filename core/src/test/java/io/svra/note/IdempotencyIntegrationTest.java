@@ -39,6 +39,12 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.rabbitmq.listener.simple.auto-startup=false",
         // LineProperties 現在是 @NotBlank，少了會啟動失敗（決策 22）。
         // 這幾個測試不打 LINE，給值只是為了讓 context 起得來。
+        // 行事曆的設定跟 LINE 的一樣是 @NotBlank，少了就起不來（決策 8 的一貫做法）。
+        // 這裡填假的：整合測試不會真的打 Google。
+        "svra.calendar.client-id=test-client",
+        "svra.calendar.client-secret=test-secret",
+        "svra.calendar.refresh-token=test-refresh-token",
+        "svra.calendar.calendar-id=test@group.calendar.google.com",
         "svra.line.channel-secret=integration-test-secret",
         "svra.line.channel-access-token=integration-test-token",
 })

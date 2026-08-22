@@ -31,10 +31,10 @@ class ExtractionCacheSerializationTest {
 
         ExtractedNote original = new ExtractedNote(List.of(
                 new ExtractedNote.Item(NoteCategory.SCHEDULE, "前往奮起湖",
-                        "2026-08-16T09:00:00+08:00", "跟家人一起", List.of("旅遊")),
+                        "2026-08-16T09:00:00+08:00", true, "跟家人一起", List.of("旅遊")),
                 // 沒有時間、沒有補充、沒有標籤的那種——null 與空清單也要能往返
                 new ExtractedNote.Item(NoteCategory.IDEA, "履歷可以用佇列深度當指標",
-                        null, null, List.of())));
+                        null, null, null, List.of())));
 
         Object restored = serializer.deserialize(serializer.serialize(original));
 

@@ -57,6 +57,9 @@ class NoteCommandParser {
         IDEA（想法）。判斷不出來就填 TODO
       - occursAt 用 ISO-8601（例如 2026-08-16T09:00:00+08:00）。
         只講日期沒講幾點時（例如「下週三」），UPDATE_TIME 沿用原本那筆的時間、ADD 用 09:00
+      - timeSpecified：使用者這次**有沒有真的講出幾點**。
+        「改到下午三點」→ true；「改到下週三」「加一筆星期五交報告」→ false。
+        這一欄不要用猜的，只問逐字裡有沒有出現時刻
       - **待辦沒有時間是正常的**，使用者還沒想好什麼時候做而已。
         整句話都沒提到時間時就不要填 occursAt，直接建立一筆沒有時間的項目——
         不要因此拒絕、不要反問時間，更不要自己編一個日期
@@ -84,7 +87,7 @@ class NoteCommandParser {
      * 誤判的代價也只是換成一句比較籠統的回覆，比讓術語漏出去輕。
      */
     private static final Pattern JARGON = Pattern.compile(
-            "occursAt|itemIndex|unhandled|\\bops\\b|\\bJSON\\b|\\bnull\\b"
+            "occursAt|itemIndex|timeSpecified|unhandled|\\bops\\b|\\bJSON\\b|\\bnull\\b"
                     + "|\\bDELETE\\b|\\bUPDATE_TITLE\\b|\\bUPDATE_TIME\\b"
                     + "|\\bADD\\b|\\bLIST\\b|\\bSCHEDULE\\b|\\bTODO\\b|\\bIDEA\\b",
             Pattern.CASE_INSENSITIVE);

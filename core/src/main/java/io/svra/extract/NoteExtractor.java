@@ -36,8 +36,21 @@ class NoteExtractor {
      * 也會被送給模型，改了它同樣要升版本——v7 就是這樣來的：字串一個字沒動，
      * 只把三個欄位標成選填。不升的話，{@code ExtractionCacheKeyGenerator} 算出來的鍵不變，
      * 快取會餵回舊結果，而 eval 比出來的數字是假的。
+     *
+     * <p>v8：加上 {@code timeSpecified}，字串與 schema 兩邊都動了。
+     * 它不是為了讓抽取更準，是為了讓<b>下游分得出 09:00 是講出來的還是補上去的</b>——
+     * 見 {@code ExtractedNote.Item} 與決策 26。
+     *
+     * <p>v9：明講「有提到哪一天就要填 occursAt，不看分類」。
+     * eval 的 {@code sched-003} 抓到的：「星期五要交季報」被判成 TODO 之後，
+     * <b>連日期都一起不填了</b>——模型把「待辦多半沒有時間」讀成了「待辦不該有時間」。
+     * 症狀在推播上看不太出來（少一行時間），但那一筆<b>永遠長不出匯入行事曆的按鈕</b>。
+     *
+     * <p>v10：把 {@code timeSpecified} 從選填改回必填。字串沒動，只動了 schema——
+     * 而 eval 從 6/9 回到 9/9。v9 的三題失敗全部是「這一欄是 null」，
+     * 也就是模型<b>根本沒回答</b>：schema 說可以省略，它就省略。決策 25 的第二個實例。
      */
-    public static final String PROMPT_VERSION = "v7";
+    public static final String PROMPT_VERSION = "v10";
 
     private static final int MAX_ATTEMPTS = 2;
 
@@ -54,8 +67,16 @@ class NoteExtractor {
         時間放 occursAt 就好，顯示時會另外排版，寫兩次只是重複
             - occursAt 用 ISO-8601（例如 2026-08-15T09:00:00+08:00）。
               只講到日期沒講時間就用當天 09:00。完全沒提到時間就填 null。
+            - **只要提到了哪一天就要填 occursAt，跟 category 無關**。
+              「星期五要交季報」是 TODO，但它有日期，occursAt 就要填星期五的 09:00。
+              待辦沒有時間很常見，但那是因為使用者沒說，不是因為它是待辦
         下面有日曆表不代表每一筆都要有時間——想法（IDEA）多半沒有時間，
         使用者沒說時間就是 null，不要拿今天的日期去填
+            - timeSpecified：使用者**有沒有真的講出幾點**。
+              「下午三點開會」→ true；「星期三要開會」「明天交報告」→ false
+              （那個 09:00 是上一條規則補的，不是他說的）。
+              occursAt 為 null 時 timeSpecified 也填 null。
+              **這一欄不要用猜的**：只問「逐字稿裡有沒有出現時刻」，有就 true，沒有就 false
             - 逐字稿裡沒有的資訊不要自己補
             - 明顯是轉錄錯誤的專有名詞，若能從上下文判斷就修正，判斷不出來就照原樣
 
@@ -196,6 +217,10 @@ class NoteExtractor {
         if (item.occursAt() != null && !item.occursAt().isBlank()) {
             occursAt = Instant.parse(item.occursAt());
         }
-        return new NoteItem(item.category(), item.title(), occursAt, item.detail(), item.tags());
+        // 沒有時間就沒有「時間是不是講出來的」可言，一律存 null——
+        // 讓模型填的 true/false 在這種情況下留下來，只會讓下游多一種要處理的組合。
+        Boolean timeSpecified = occursAt == null ? null : item.timeSpecified();
+        return new NoteItem(item.category(), item.title(), occursAt, timeSpecified,
+                item.detail(), item.tags());
     }
 }
