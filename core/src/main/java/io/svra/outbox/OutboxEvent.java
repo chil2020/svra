@@ -97,6 +97,21 @@ public class OutboxEvent {
         return eventType + ":" + sourceMessageId;
     }
 
+    /**
+     * 判死：不退避、不再重試。
+     *
+     * <p>給處理器丟出 {@link OutboxPermanentFailureException} 時用——
+     * 那代表失敗的原因不會隨時間改變（授權被撤銷、行事曆被刪）。
+     *
+     * <p>{@code attempts} 照樣累加：它記的是「試過幾次」，而這一次<b>確實試過了</b>。
+     * 把它留在 0 會讓 log 與資料看起來像是從沒送出過。
+     */
+    public void markPermanentlyFailed(String error) {
+        this.attempts++;
+        this.lastError = error;
+        this.status = OutboxStatus.FAILED;
+    }
+
     public void markSent(Instant now) {
         this.status = OutboxStatus.SENT;
         this.sentAt = now;

@@ -62,7 +62,7 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
      * {@link TranscribeDlqListener}。兩條共用同一個收尾。
      */
     @Override
-    public void onGiveUp(String payload) {
+    public void onGiveUp(String payload, Exception cause) {
         failureReporter.report(parse(payload).sourceMessageId());
     }
 

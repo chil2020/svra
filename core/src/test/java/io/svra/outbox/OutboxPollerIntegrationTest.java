@@ -47,6 +47,12 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.rabbitmq.listener.simple.auto-startup=false",
         // LineProperties 現在是 @NotBlank，少了會啟動失敗（決策 22）。
         // 這幾個測試不打 LINE，給值只是為了讓 context 起得來。
+        // 行事曆的設定跟 LINE 的一樣是 @NotBlank，少了就起不來（決策 8 的一貫做法）。
+        // 這裡填假的：整合測試不會真的打 Google。
+        "svra.calendar.client-id=test-client",
+        "svra.calendar.client-secret=test-secret",
+        "svra.calendar.refresh-token=test-refresh-token",
+        "svra.calendar.calendar-id=test@group.calendar.google.com",
         "svra.line.channel-secret=integration-test-secret",
         "svra.line.channel-access-token=integration-test-token",
 })
@@ -54,6 +60,7 @@ class OutboxPollerIntegrationTest {
 
     private static final String BOOM = "TEST_ALWAYS_FAILS";
     private static final String FINE = "TEST_ALWAYS_SUCCEEDS";
+    private static final String DOOMED = "TEST_PERMANENTLY_FAILS";
 
     @Autowired
     private OutboxPoller poller;
@@ -68,12 +75,16 @@ class OutboxPollerIntegrationTest {
     private SucceedingHandler succeedingHandler;
 
     @Autowired
+    private PermanentlyFailingHandler permanentHandler;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void clearOutbox() {
         outboxRepository.deleteAll();
         succeedingHandler.reset();
+        permanentHandler.reset();
     }
 
     @Test
@@ -113,6 +124,44 @@ class OutboxPollerIntegrationTest {
 
         assertThat(reload(doomed).getAttempts()).isEqualTo(OutboxEvent.MAX_ATTEMPTS);
         assertThat(reload(doomed).getStatus()).isEqualTo(OutboxStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("🔴 判死的失敗 → 一次就放棄，不走退避重試")
+    void permanentFailureIsNotRetried() {
+        OutboxEvent doomed = save(DOOMED);
+        OutboxEvent innocent = save(FINE);
+
+        poller.dispatch();
+
+        // 授權被撤銷、行事曆被刪這種失敗，退避五次只是把「使用者知道出事」
+        // 往後推幾分鐘，中間每一次都是註定失敗的請求。
+        assertThat(reload(doomed).getStatus()).isEqualTo(OutboxStatus.FAILED);
+        assertThat(reload(doomed).getAttempts())
+                .as("試過一次就是一次——留在 0 會讓資料看起來像從沒送出過")
+                .isEqualTo(1);
+        assertThat(permanentHandler.giveUps()).isEqualTo(1);
+        assertThat(permanentHandler.lastCause())
+                .as("收尾要說得出人話，就得知道是哪一種失敗")
+                .isInstanceOf(OutboxPermanentFailureException.class);
+
+        assertThat(reload(innocent).getStatus())
+                .as("判死的那一筆不該把同一批的其他事件拖下水")
+                .isEqualTo(OutboxStatus.SENT);
+    }
+
+    @Test
+    @DisplayName("判死之後不會再被撈出來，就算把到期時間拉回現在")
+    void permanentFailureStaysDead() {
+        OutboxEvent doomed = save(DOOMED);
+        poller.dispatch();
+
+        makeDueNow(doomed.getId());
+        poller.dispatch();
+
+        assertThat(permanentHandler.calls())
+                .as("狀態已經是 FAILED，查詢只撈 PENDING")
+                .isEqualTo(1);
     }
 
     @Test
@@ -207,6 +256,60 @@ class OutboxPollerIntegrationTest {
         @Bean
         SucceedingHandler succeedingHandler() {
             return new SucceedingHandler();
+        }
+
+        @Bean
+        PermanentlyFailingHandler permanentlyFailingHandler() {
+            return new PermanentlyFailingHandler();
+        }
+    }
+
+    /**
+     * 一個「重試不會好」的處理器。
+     *
+     * <p>一樣標 {@code @Transactional}：判死那條路跟重試那條路走的是同一段
+     * {@code runOutsideOwnTransaction}，要測的正是它在兩種例外下都成立。
+     */
+    static class PermanentlyFailingHandler implements OutboxEventHandler {
+
+        private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicInteger giveUps = new AtomicInteger();
+        private final AtomicReference<Exception> lastCause = new AtomicReference<>();
+
+        @Override
+        public String eventType() {
+            return DOOMED;
+        }
+
+        @Override
+        @Transactional
+        public void handle(String payload) {
+            calls.incrementAndGet();
+            throw new OutboxPermanentFailureException("Google 授權失效（invalid_grant）");
+        }
+
+        @Override
+        public void onGiveUp(String payload, Exception cause) {
+            giveUps.incrementAndGet();
+            lastCause.set(cause);
+        }
+
+        int calls() {
+            return calls.get();
+        }
+
+        int giveUps() {
+            return giveUps.get();
+        }
+
+        Exception lastCause() {
+            return lastCause.get();
+        }
+
+        void reset() {
+            calls.set(0);
+            giveUps.set(0);
+            lastCause.set(null);
         }
     }
 

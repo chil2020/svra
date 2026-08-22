@@ -25,10 +25,15 @@ public interface OutboxEventHandler {
     void handle(String payload) throws Exception;
 
     /**
-     * 重試耗盡、徹底放棄時呼叫。預設什麼都不做——
+     * 重試耗盡、或被判死時呼叫。預設什麼都不做——
      * 但如果放棄會讓使用者的東西卡在中間狀態（例如 note 永遠停在 PENDING），
      * 就必須在這裡收尾，否則沒有人知道它被放棄了。
+     *
+     * @param cause 最後那次失敗的原因。<b>要它是為了讓收尾說得出人話</b>：
+     *              「重試五次都失敗」與「授權被撤銷了，去重新授權」對使用者是
+     *              兩種完全不同的訊息，而只有這個例外分得出來
+     *              （見 {@link OutboxPermanentFailureException}）。
      */
-    default void onGiveUp(String payload) throws Exception {
+    default void onGiveUp(String payload, Exception cause) throws Exception {
     }
 }

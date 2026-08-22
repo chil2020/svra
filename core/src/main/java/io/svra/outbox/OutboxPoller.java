@@ -88,6 +88,14 @@ public class OutboxPoller {
             log.info("outbox 送出：{} id={} 耗時={}ms",
                     event.getEventType(), event.getId(), elapsedMillis(startedNanos));
 
+        } catch (OutboxPermanentFailureException e) {
+            // 🔴 不走退避。這種失敗的原因不會隨時間改變，重試只是把
+            // 「使用者知道出事」往後推幾分鐘，中間每一次都是註定失敗的請求。
+            event.markPermanentlyFailed(e.toString());
+            log.error("outbox 判死：{} id={} 失敗的原因不會自己好，不重試",
+                    event.getEventType(), event.getId(), e);
+            giveUp(event, handler, e);
+
         } catch (Exception e) {
             event.markFailed(e.toString(), now);
 
@@ -97,7 +105,7 @@ public class OutboxPoller {
                 // 而「這筆永遠不會再送了」是這個系統最需要被看見的事件之一。
                 log.error("outbox 放棄：{} id={} 已重試 {} 次，不會再送",
                         event.getEventType(), event.getId(), event.getAttempts(), e);
-                giveUp(event, handler);
+                giveUp(event, handler, e);
             } else {
                 log.warn("outbox 重試：{} id={} 第 {}/{} 次，{}後再試：{}",
                         event.getEventType(), event.getId(), event.getAttempts(),
@@ -112,13 +120,13 @@ public class OutboxPoller {
      * 重試耗盡就不會再有人處理這個事件了，讓對應的處理器自己收尾——
      * 該怎麼善後只有它知道（例如把 note 標成 FAILED 並通知使用者）。
      */
-    private void giveUp(OutboxEvent event, OutboxEventHandler handler) {
+    private void giveUp(OutboxEvent event, OutboxEventHandler handler, Exception cause) {
         if (handler == null) {
             log.error("沒有處理器可以收尾，這筆事件沒有終局：id={}", event.getId());
             return;
         }
         try {
-            runOutsideOwnTransaction(() -> handler.onGiveUp(event.getPayload()));
+            runOutsideOwnTransaction(() -> handler.onGiveUp(event.getPayload(), cause));
             log.info("放棄後的收尾已完成：id={}", event.getId());
         } catch (Exception cleanupFailure) {
             // 收尾也失敗＝使用者不會知道這件事被放棄了，比放棄本身更嚴重
