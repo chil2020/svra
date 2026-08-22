@@ -10,6 +10,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import io.svra.calendar.CalendarSync;
+import io.svra.notify.Blocklist;
+import io.svra.notify.Greetings;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
 
@@ -44,6 +46,12 @@ class LineWebhookControllerTest {
 
     @MockitoBean
     private CalendarSync calendarSync;
+
+    @MockitoBean
+    private Greetings greetings;
+
+    @MockitoBean
+    private Blocklist blocklist;
 
     /** 保留幾個不使用的欄位，驗證寬鬆解析。 */
     private static final String AUDIO_EVENT_BODY = """
@@ -150,6 +158,66 @@ class LineWebhookControllerTest {
                   "source":{"type":"user","userId":"U4af4980629"},
                   "postback":{"data":"action=somethingElse"}
                 }]}""").andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("🔴 加好友 → 送歡迎訊息，並解除封鎖標記")
+    void followTriggersAWelcome() throws Exception {
+        postWebhook("""
+                {"events":[{
+                  "type":"follow",
+                  "replyToken":"rt-follow",
+                  "webhookEventId":"01HFOLLOW",
+                  "source":{"type":"user","userId":"U4af4980629"}
+                }]}""").andExpect(status().isOk());
+
+        // 在這之前，加了好友的人收到的是一片空白——不知道要傳語音、
+        // 不知道可以引用訊息修改、不知道有匯入按鈕。
+        verify(greetings).welcome("U4af4980629", "01HFOLLOW", "rt-follow");
+        // 封鎖過再回來的人，標記不清掉就會變成永遠收不到訊息的幽靈
+        verify(blocklist).unblock("U4af4980629");
+    }
+
+    @Test
+    @DisplayName("封鎖 → 記下來，之後不要再對他做事")
+    void unfollowIsRecorded() throws Exception {
+        postWebhook("""
+                {"events":[{
+                  "type":"unfollow",
+                  "webhookEventId":"01HUNFOLLOW",
+                  "source":{"type":"user","userId":"U4af4980629"}
+                }]}""").andExpect(status().isOk());
+
+        verify(blocklist).block("U4af4980629");
+        verify(greetings, never()).welcome(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("🔴 收回訊息 → 忘掉那則語音留下的所有東西")
+    void unsendForgetsTheNote() throws Exception {
+        postWebhook("""
+                {"events":[{
+                  "type":"unsend",
+                  "webhookEventId":"01HUNSEND",
+                  "source":{"type":"user","userId":"U4af4980629"},
+                  "unsend":{"messageId":"325708"}
+                }]}""").andExpect(status().isOk());
+
+        // 他按下收回時，語音早就轉錄完、逐字稿與行程都在資料庫裡了。
+        // LINE 的開發指南明確要求處理這個事件。
+        verify(noteService).forgetMessage("U4af4980629", "325708");
+    }
+
+    @Test
+    @DisplayName("收回事件少了 messageId → 收得下但不處理，不是爆掉")
+    void unsendWithoutMessageIdIsIgnored() throws Exception {
+        postWebhook("""
+                {"events":[{
+                  "type":"unsend",
+                  "source":{"type":"user","userId":"U4af4980629"}
+                }]}""").andExpect(status().isOk());
+
+        verify(noteService, never()).forgetMessage(anyString(), anyString());
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import io.svra.SvraProperties;
 import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -40,13 +41,17 @@ public class NoteService {
     private final NoteRepository noteRepository;
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
+    /** 收回訊息時要連音檔一起刪，而音檔的位置只有這裡知道。 */
+    private final SvraProperties svra;
 
     public NoteService(NoteRepository noteRepository,
             OutboxEventRepository outboxRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SvraProperties svra) {
         this.noteRepository = noteRepository;
         this.outboxRepository = outboxRepository;
         this.objectMapper = objectMapper;
+        this.svra = svra;
     }
 
     /**
@@ -81,6 +86,48 @@ public class NoteService {
                 OutboxEvent.dedupeKeyFor(EVENT_TRANSCRIBE_REQUESTED, sourceMessageId));
         log.info("outbox 寫入：{}（與 note 同交易）", EVENT_TRANSCRIBE_REQUESTED);
         return true;
+    }
+
+    /**
+     * 使用者收回了那則語音——把我們留下的東西一併忘掉。
+     *
+     * <p>LINE 的開發指南明確要求處理收回事件：
+     * <i>"Process unsend events to respect user preferences and prevent unsent
+     * messages from remaining accessible."</i>
+     *
+     * <p>對這個系統而言那不只是禮貌。他按下收回的時候，語音早就轉錄完、
+     * 逐字稿與抽出來的行程都已經在資料庫裡了。<b>自己用無所謂，別人的語音就是另一回事。</b>
+     *
+     * <p><b>刪掉之後不回覆。</b>他收回訊息的意思就是「當作沒發生過」，
+     * 這時候跳出一則「已經幫你刪掉囉」只是把那件事又講了一次。log 記得住就夠。
+     *
+     * <p>音檔也要刪。轉錄成功後 worker 本來就會刪（{@code WHISPER_DELETE_AUDIO}），
+     * 但收回可能發生在轉錄之前——那時候檔案還躺在共用目錄裡。
+     */
+    @Transactional
+    public void forgetMessage(String lineUserId, String sourceMessageId) {
+        int removed = noteRepository.deleteBySourceMessage(lineUserId, sourceMessageId);
+        deleteAudioIfPresent(sourceMessageId);
+        if (removed > 0) {
+            // 不記內容，只記發生過——那是唯一能證明我們真的忘了的痕跡。
+            log.info("使用者收回訊息，已刪除對應的筆記與音檔");
+        } else {
+            // 收回貼圖、收回文字指令都會走到這裡，而那些本來就沒留下東西。
+            log.debug("使用者收回的訊息沒有對應的筆記，不需要處理");
+        }
+    }
+
+    /**
+     * 刪不掉不能讓整件事失敗：資料庫那一半才是重點，而它已經提交了。
+     * 檔案殘留是可以事後清的，把例外往外拋只會讓 webhook 回 500 讓 LINE 重送。
+     */
+    private void deleteAudioIfPresent(String sourceMessageId) {
+        try {
+            java.nio.file.Files.deleteIfExists(
+                    java.nio.file.Path.of(svra.audioDir(), sourceMessageId + ".m4a"));
+        } catch (java.io.IOException e) {
+            log.warn("音檔刪不掉，要人工清理：messageId={}", sourceMessageId, e);
+        }
     }
 
     public String toPayload(String lineUserId, String sourceMessageId) {

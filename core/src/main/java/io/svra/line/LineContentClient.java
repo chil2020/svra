@@ -43,6 +43,15 @@ public class LineContentClient {
                         // exchange() 不會因為 4xx/5xx 拋例外，狀態碼要自己檢查。
                         // 少了這段，錯誤頁面會被當成音檔寫下去，直到 worker 解碼失敗
                         // 才爆——那時候的錯誤訊息離真正的原因已經差了三層。
+                        int code = response.getStatusCode().value();
+                        // 🔴 404／410 ＝ 檔案已經被 LINE 刪掉了，重試不會讓它回來。
+                        // 跟連線失敗分開，因為能做的事完全不同：那個重試就會好，
+                        // 這個只能請使用者重傳（見 ContentUnavailableException）。
+                        if (code == 404 || code == 410) {
+                            throw new ContentUnavailableException(
+                                    "LINE 上已經沒有這則訊息的內容了（回應 "
+                                            + response.getStatusCode() + "）");
+                        }
                         if (!response.getStatusCode().is2xxSuccessful()) {
                             throw new IOException("LINE content API 回應 "
                                     + response.getStatusCode() + "，messageId=" + messageId);

@@ -17,6 +17,7 @@ import io.svra.line.LinePushClient;
 import io.svra.line.ReplyTokenExpiredException;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,17 +41,33 @@ class PushTextRequestedHandlerTest {
 
     @Mock LinePushClient pushClient;
     @Mock MessageAnchors anchors;
+    @Mock Blocklist blocklist;
 
     private final JsonMapper objectMapper = JsonMapper.builder().build();
     private PushTextRequestedHandler handler;
 
     @BeforeEach
     void setUp() {
-        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors);
+        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors, blocklist);
     }
 
     private void handle(PushTextPayload payload) {
         handler.handle(objectMapper.writeValueAsString(payload));
+    }
+
+    @Test
+    @DisplayName("🔴 收件者已封鎖 → 一則都不送，也不要卡在重試")
+    void nothingIsSentToSomeoneWhoBlockedUs() {
+        when(blocklist.isBlocked(USER_ID)).thenReturn(true);
+
+        handle(PushTextPayload.card(USER_ID, "抬頭", List.of(1L), "card-1", FLEX)
+                .repliedWith("rt-abc"));
+
+        verify(pushClient, never()).replyFlex(anyString(), anyString(), anyString());
+        verify(pushClient, never()).pushFlex(anyString(), anyString(), anyString());
+        // 當成成功而不是失敗：重試不會讓他變成沒封鎖，只會在 log 裡堆一堆
+        // 註定沒有意義的失敗。錨點也不記——那則訊息根本不存在。
+        verify(anchors, never()).record(anyString(), anyString(), anyString(), any());
     }
 
     @Test

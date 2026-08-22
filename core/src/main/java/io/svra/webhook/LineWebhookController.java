@@ -14,6 +14,8 @@ import io.svra.LogContext;
 import io.svra.calendar.CalendarSync;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
+import io.svra.notify.Blocklist;
+import io.svra.notify.Greetings;
 
 /**
  * 走到這裡的請求都已經通過驗簽（見決策 22 與 {@code io.svra.security.SecurityConfig}）。
@@ -33,12 +35,16 @@ public class LineWebhookController {
     private final NoteService noteService;
     private final NoteCommandService commandService;
     private final CalendarSync calendarSync;
+    private final Greetings greetings;
+    private final Blocklist blocklist;
 
     public LineWebhookController(NoteService noteService, NoteCommandService commandService,
-            CalendarSync calendarSync) {
+            CalendarSync calendarSync, Greetings greetings, Blocklist blocklist) {
         this.noteService = noteService;
         this.commandService = commandService;
         this.calendarSync = calendarSync;
+        this.greetings = greetings;
+        this.blocklist = blocklist;
     }
 
     /**
@@ -105,8 +111,21 @@ public class LineWebhookController {
                     event.webhookEventId(), event.postback().data(), event.replyToken())) {
                 log.debug("不認識的 postback，忽略");
             }
+        } else if (event.isFollow()) {
+            // 🔴 在這之前，加了好友的人收到的是一片空白。單人使用時那不是缺口
+            // （你自己知道怎麼用），開放給別人的那一刻它就是第一印象。
+            log.info("新使用者加入好友");
+            blocklist.unblock(event.source().userId());
+            greetings.welcome(event.source().userId(), event.webhookEventId(), event.replyToken());
+        } else if (event.isUnfollow()) {
+            log.info("使用者封鎖或刪除本帳號");
+            blocklist.block(event.source().userId());
+        } else if (event.isUnsend()) {
+            // LINE 的開發指南明確要求處理：他按下收回的時候，語音早就轉錄完、
+            // 逐字稿與抽出來的行程都已經在資料庫裡了。
+            noteService.forgetMessage(event.source().userId(), event.unsend().messageId());
         } else {
-            // 貼圖、加好友、已讀……收得下但不處理。看得到才知道「沒反應」是預期的。
+            // 貼圖、已讀、加入群組……收得下但不處理。看得到才知道「沒反應」是預期的。
             log.debug("不處理的事件型別：type={}", event.type());
         }
     }

@@ -25,12 +25,14 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     private final LinePushClient pushClient;
     private final ObjectMapper objectMapper;
     private final MessageAnchors anchors;
+    private final Blocklist blocklist;
 
     PushTextRequestedHandler(LinePushClient pushClient, ObjectMapper objectMapper,
-            MessageAnchors anchors) {
+            MessageAnchors anchors, Blocklist blocklist) {
         this.pushClient = pushClient;
         this.objectMapper = objectMapper;
         this.anchors = anchors;
+        this.blocklist = blocklist;
     }
 
     @Override
@@ -41,6 +43,12 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     @Override
     public void handle(String payload) {
         PushTextPayload push = objectMapper.readValue(payload, PushTextPayload.class);
+        // 封鎖的人收不到，送了也是白送。直接當成功——重試不會讓他變成沒封鎖，
+        // 而讓事件卡在 PENDING 只會在 log 裡堆一堆註定沒有意義的失敗。
+        if (blocklist.isBlocked(push.lineUserId())) {
+            log.info("收件者已封鎖本帳號，略過這則訊息");
+            return;
+        }
         String lineMessageId = send(push);
         // 只有送出去之後才拿得到 messageId，錨點也只能在這裡記——
         // 少了它，使用者引用這則回覆再改一次就會對不上（見 MessageAnchors）。

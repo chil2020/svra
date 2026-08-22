@@ -44,6 +44,26 @@ public interface NoteRepository extends JpaRepository<Note, Long> {
      */
     Optional<Note> findBySourceMessageId(String sourceMessageId);
 
+    /**
+     * 忘掉一則語音，連同它抽出來的所有東西。
+     *
+     * <p>只刪 {@code notes} 就夠：{@code note_extractions} 與 {@code note_items}
+     * 上都有 {@code ON DELETE CASCADE}（見 V3）。<b>那個約束原本只是資料完整性，
+     * 在這裡變成了刪除的正確性</b>——少了它，逐字稿沒了而抽出來的行程還留著。
+     *
+     * <p>🔴 <b>條件一定要含 lineUserId。</b>message id 猜不到，所以實務上踩不到，
+     * 但「靠猜不到」跟「擋得住」是兩件事——而這是一個<b>刪除</b>操作。
+     *
+     * @return 1 = 真的刪掉了；0 = 那則訊息不是這個人的，或本來就沒留下任何東西
+     */
+    @Modifying
+    @Query(value = """
+            DELETE FROM notes
+             WHERE source_message_id = :sourceMessageId AND line_user_id = :lineUserId
+            """, nativeQuery = true)
+    int deleteBySourceMessage(@Param("lineUserId") String lineUserId,
+            @Param("sourceMessageId") String sourceMessageId);
+
     /** 使用者沒引用特定推播時，指令套用在最近一則筆記上。 */
     Optional<Note> findTopByLineUserIdOrderByIdDesc(String lineUserId);
 

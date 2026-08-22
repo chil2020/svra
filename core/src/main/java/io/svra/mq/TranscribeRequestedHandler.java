@@ -8,10 +8,12 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
 import io.svra.SvraProperties;
+import io.svra.line.ContentUnavailableException;
 import io.svra.line.LineContentClient;
 import io.svra.note.NoteService;
 import io.svra.note.NoteService.NoteEventPayload;
 import io.svra.outbox.OutboxEventHandler;
+import io.svra.outbox.OutboxPermanentFailureException;
 
 /** 下載音檔並把轉錄任務丟進佇列。 */
 @Component
@@ -47,7 +49,13 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
     public void handle(String payload) throws Exception {
         String messageId = parse(payload).sourceMessageId();
         Path target = Path.of(svra.audioDir(), messageId + ".m4a");
-        lineContentClient.download(messageId, target);
+        try {
+            lineContentClient.download(messageId, target);
+        } catch (ContentUnavailableException gone) {
+            // 🔴 檔案被 LINE 刪掉了。退避重試五次只是把「使用者知道要重傳」
+            // 這件事往後推幾分鐘，而中間每一次都是註定 404 的請求。
+            throw new OutboxPermanentFailureException("音檔已經不在 LINE 上了", gone);
+        }
 
         rabbitTemplate.convertAndSend(
                 mq.exchange(),
@@ -63,7 +71,14 @@ class TranscribeRequestedHandler implements OutboxEventHandler {
      */
     @Override
     public void onGiveUp(String payload, Exception cause) {
-        failureReporter.report(parse(payload).sourceMessageId());
+        String messageId = parse(payload).sourceMessageId();
+        // 「檔案沒了」跟「轉錄失敗」對使用者是兩件完全不同的事。混在一起講的話，
+        // 他會以為是模型不行——而實際上他只要重傳一次就好。
+        if (cause != null && cause.getCause() instanceof ContentUnavailableException) {
+            failureReporter.reportContentGone(messageId);
+            return;
+        }
+        failureReporter.report(messageId);
     }
 
     private NoteEventPayload parse(String payload) {

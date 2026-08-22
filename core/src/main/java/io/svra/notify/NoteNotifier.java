@@ -62,19 +62,22 @@ public class NoteNotifier {
     private final LinePushClient pushClient;
     private final MessageAnchors anchors;
     private final CardRenderer renderer;
+    private final Blocklist blocklist;
 
     public NoteNotifier(NoteRepository noteRepository,
             NoteExtractionRepository extractionRepository,
             NoteItemRepository itemRepository,
             LinePushClient pushClient,
             MessageAnchors anchors,
-            CardRenderer renderer) {
+            CardRenderer renderer,
+            Blocklist blocklist) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
         this.itemRepository = itemRepository;
         this.pushClient = pushClient;
         this.anchors = anchors;
         this.renderer = renderer;
+        this.blocklist = blocklist;
     }
 
     /** 抽取完成後的推播。 */
@@ -83,6 +86,11 @@ public class NoteNotifier {
         Note note = noteRepository.findBySourceMessageId(sourceMessageId).orElse(null);
         if (note == null) {
             log.error("要推播但找不到 note：messageId={}", sourceMessageId);
+            return;
+        }
+        // 使用者可能在轉錄跑到一半時就封鎖了——那段路要數十秒，時間夠長。
+        if (blocklist.isBlocked(note.getLineUserId())) {
+            log.info("收件者已封鎖本帳號，略過推播：messageId={}", sourceMessageId);
             return;
         }
 
