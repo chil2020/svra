@@ -26,6 +26,42 @@ description = "LINE Channel Access Token"
 regex = '''(?i)(line[_-]?(channel[_-]?)?access[_-]?token|Configuration\()\s*[=:(]\s*['"][A-Za-z0-9+/]{160,}={0,2}['"]'''
 tags = ["line", "token"]
 
+# ── 自訂規則：Google OAuth 憑證（決策 26 帶進來的） ──────────────────
+# 行事曆的 refresh token 等同於「永久的行事曆讀寫權」，
+# 外洩的嚴重度不比 LINE token 低。
+#
+# 🔴 **但這裡跟 LINE 那條的理由不一樣，而差別是量出來的。**
+# 官方規則集<b>不是</b>完全放行——`generic-api-key` 抓得到，
+# 條件是<b>旁邊要有關鍵字當線索</b>：
+#
+#   GOOGLE_REFRESH_TOKEN=1//0xxxx…    → generic-api-key 抓到 ✓
+#   Credentials("1//0xxxx…")          → 一筆都沒有 ✗
+#
+# 而後者正是 2024 年那次的形狀：憑證<b>寫死在 legacy/app.py 的程式碼裡</b>，
+# 沒有任何 `XXX_TOKEN=` 可以當線索。下面兩條靠的是固定前綴（`1//`、`GOCSPX-`），
+# 不依賴上下文，所以那個縫補得起來。
+#
+# ⚠️ 測這件事有個陷阱，踩過一次：用 `AbCdEfGh…` 這種手打的假憑證去測，
+# 會被 gitleaks 預設的 stopword 白名單吃掉，得到一個「安全」的假結論。
+# 要用真正隨機的字串測，否則驗的是白名單而不是規則。
+#
+# 🔴 **client id 刻意不設規則**：它在 OAuth 流程裡本來就會出現在使用者的瀏覽器上，
+# 設計上就是公開的。把不是祕密的東西也標成祕密，只會讓人習慣性忽略告警——
+# 而那會連真的那兩條一起忽略掉。
+[[rules]]
+id = "google-oauth-refresh-token"
+description = "Google OAuth Refresh Token"
+# 特徵：固定前綴 1// 之後接一長串 base64url。
+regex = '''1//[0-9A-Za-z\-_]{50,}'''
+tags = ["google", "oauth", "token"]
+
+[[rules]]
+id = "google-oauth-client-secret"
+description = "Google OAuth Client Secret"
+# 特徵：固定前綴 GOCSPX- 之後 28 個字元。
+regex = '''GOCSPX-[0-9A-Za-z\-_]{28}'''
+tags = ["google", "oauth", "secret"]
+
 # ── 本機開發用的佔位值 ────────────────────────────────────────────────
 # docker-compose 與 application.yml 的預設值刻意寫成 svra-dev-only，
 # 讓人一眼看出「這不是真憑證」；正式環境一律由環境變數覆蓋。

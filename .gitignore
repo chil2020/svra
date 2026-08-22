@@ -7,6 +7,12 @@ target/
 *.class
 *.jar
 
+# Spring Modulith 的 Documenter 把 javadoc.json 寫到「相對於工作目錄」的 build/ 底下。
+# 從 repo 根目錄跑 maven 會更新版控裡那一份（build/generated-spring-modulith/），
+# 但從 core/ 底下跑就會多長出一個 core/build/ ——同一份東西的第二個副本，
+# 而且它會在 git status 裡以未追蹤檔案的身分待著，等人不小心 add 進去。
+core/build/
+
 # Python
 __pycache__/
 *.pyc

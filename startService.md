@@ -234,11 +234,45 @@ docker compose logs whisper-worker --tail 20
 > 行程結束 → `restart: unless-stopped` 拉起來 → 再撞同一堵牆。
 > `docker compose exec` 這時會直接拒絕連進去。
 
-### core 啟動就失敗，抱怨 `svra.line.channel-secret`
+### core 啟動就失敗，抱怨 `svra.line.channel-secret` 或 `svra.calendar.*`
 
-`.env` 裡的 LINE 憑證沒填。這是**刻意讓它在啟動時失敗**的
+`.env` 裡的憑證沒填。這是**刻意讓它在啟動時失敗**的
 （[決策 22](README.md#22-驗簽進-spring-security而-body-得自己包一層)）——
 不擋的話會變成每一則訊息都回 500、LINE 無限重送，而應用看起來一切正常。
+
+行事曆那四個鍵（`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` /
+`GOOGLE_REFRESH_TOKEN` / `GOOGLE_CALENDAR_ID`）跑一次
+`python3 deploy/google-calendar-auth.py` 就會拿到，見
+[決策 26](README.md#26-匯入行事曆讓外部系統自己擋掉重複)。
+
+> 🔴 **但它們是有條件必填的。** `CALENDAR_OAUTH_USER_IDS` 空的話所有人走預填連結，
+> 那四個留白是正確狀態（[決策 27](README.md#27-讓別人也能用擋路的不是使用者是-google-的審核)）。
+> **白名單有人卻沒填齊才會啟動失敗**——因為那些人會按到一顆註定失敗的按鈕。
+> 錯誤訊息會直接說怎麼修。
+
+### 匯入行事曆的按鈕按了沒反應
+
+**先分清楚是哪一種按鈕。** 白名單裡的人按的是 postback（後端直接寫入），
+其他人按的是一條開 Google 預填頁的連結——兩者的排查完全不同。
+
+**連結那種**：點下去應該**跳出 LINE**、開系統瀏覽器。如果它留在 LINE 的內建瀏覽器裡
+而且顯示 `403 disallowed_useragent`，就是 `openExternalBrowser=1` 沒帶到——
+Google 自 2021 起拒絕在內嵌 webview 完成登入，而且**沒有 fallback**。
+檢查推播出去的 Flex JSON 裡 `action.uri` 有沒有那個參數。
+
+**postback 那種**：先看啟動時那一行 `已換發 Google access token`。沒有它、而是一行
+`Google 行事曆的授權目前是壞的`，就是 refresh token 失效了。
+若 log 出現 `不在白名單的使用者送來匯入請求，已拒絕`，那是舊卡片——
+那個人當時在名單裡，現在不在了（卡片是會過期的訊息，見決策 27）。
+
+**最常見的原因是 GCP 的 consent screen 還停在 `Testing`**——
+Google 會在發出 refresh token 的**七天後**撤銷它。到 GCP console 按
+`Publish app` 切到 `In Production`，再重跑一次授權腳本。
+
+按下去之後兩秒沒有回覆，但聊天室裡有你自己那則「匯入行事曆」——
+那是 outbox 還沒輪到，看 `outbox_events` 裡 `CALENDAR_SYNC_REQUESTED` 那幾筆的
+`status` 與 `last_error`。`FAILED` 且 `attempts = 1` 代表被判死了
+（授權失效、行事曆被刪、權限不足），那種不會重試，log 裡有原因。
 
 ### 語音進得來，但一直沒有回覆
 
@@ -303,10 +337,12 @@ docker compose --profile full up -d core
 
 ```
 AUDIO_DIR  MANAGEMENT_PORT  OLLAMA_BASE_URL  OLLAMA_MODEL  SERVER_PORT  WHISPER_DELETE_AUDIO
+CALENDAR_DEFAULT_DURATION_MINUTES
 ```
 
-**現在不影響運作**——這些鍵在 `application.yml` 與 `docker-compose.yml` 裡都有預設值。
-但要改埠或換模型時會找不到地方改，值得補齊：
+**大部分不影響運作**——這些鍵在 `application.yml` 與 `docker-compose.yml` 裡都有預設值。
+但 `GOOGLE_*` 那四個是例外：**它們沒有預設值，沒填就啟動失敗**（見上面那一節）。
+其餘的要改埠或換模型時會找不到地方改，值得一起補齊：
 
 ```bash
 # 對照一下缺什麼
