@@ -90,7 +90,8 @@ class GoogleCalendarClient {
                         return false;
                     }
                     if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw classify("寫入事件", response.getStatusCode(),
+                        // 這裡的 404 是「行事曆不見了」，不是「事件不見了」
+                        throw classify("寫入事件", false, response.getStatusCode(),
                                 response.bodyTo(Map.class));
                     }
                     return true;
@@ -108,7 +109,7 @@ class GoogleCalendarClient {
                 .body(body)
                 .exchange((request, response) -> {
                     if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw classify("更新事件", response.getStatusCode(),
+                        throw classify("更新事件", true, response.getStatusCode(),
                                 response.bodyTo(Map.class));
                     }
                     return true;
@@ -135,7 +136,8 @@ class GoogleCalendarClient {
                         return true;
                     }
                     if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw classify("刪除事件", response.getStatusCode(),
+                        // 刪除的 404/410 在上面就當成功了，走到這裡的 404 不可能是事件不見
+                        throw classify("刪除事件", false, response.getStatusCode(),
                                 response.bodyTo(Map.class));
                     }
                     log.info("行事曆已刪除事件：eventId={}", eventId);
@@ -156,7 +158,11 @@ class GoogleCalendarClient {
      * <p>其餘一律暫時：5xx、429、逾時、連不上。<b>不確定的時候當暫時</b>——
      * 誤判成永久會推一則假的「授權失效」給使用者，誤判成暫時只是晚幾分鐘知道。
      */
-    private static RuntimeException classify(String what, HttpStatusCode status, Map<?, ?> body) {
+    // package-private 而不是 private：這個類別最重要的職責就是這個判斷
+    // （見類別的 javadoc），而分錯的症狀是「使用者收到一則假的授權失效通知」
+    // 或「一個一次重試就好的狀況被判死」——兩種都不會有例外浮上來。
+    static RuntimeException classify(String what, boolean notFoundMeansEventGone,
+            HttpStatusCode status, Map<?, ?> body) {
         String reason = reasonOf(body);
         String detail = what + " 失敗：" + status + (reason == null ? "" : "（" + reason + "）");
 
@@ -168,7 +174,21 @@ class GoogleCalendarClient {
             return new OutboxPermanentFailureException(detail + "——權限不足或 API 未啟用");
         }
         if (code == 404) {
-            return new OutboxPermanentFailureException(detail + "——行事曆不存在，請確認 calendarId");
+            // 🔴 同一個狀態碼，兩種完全不同的意思，而它們的正確處置也相反。
+            //
+            // 寫入時的 404 ＝ 行事曆本身不見了（id 錯了、或那本被刪了）。
+            // 那不會自己好，判死。
+            //
+            // 更新時的 404 ＝ **那個事件**不見了。這種要當暫時性失敗，
+            // 因為 upsert 會整段重跑，而重跑的第一步 insert 這次會成功
+            // ——事件真的不在了，就不會再撞 409。**它會自己修好。**
+            // 判死的話，反而是把一個一次重試就解決的狀況變成永久失敗，
+            // 還會推一則「行事曆不存在，請確認 calendarId」給使用者，
+            // 而 calendarId 根本沒有問題。
+            return notFoundMeansEventGone
+                    ? new IllegalStateException(detail + "——事件已經不在了，重試會改走新增")
+                    : new OutboxPermanentFailureException(
+                            detail + "——行事曆不存在，請確認 calendarId");
         }
         return new IllegalStateException(detail);
     }

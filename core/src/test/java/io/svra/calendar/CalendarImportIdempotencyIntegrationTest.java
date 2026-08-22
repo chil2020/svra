@@ -136,6 +136,22 @@ class CalendarImportIdempotencyIntegrationTest {
     }
 
     @Test
+    @DisplayName("同一個被拒的 postback 被 LINE 重送 → 只說一次")
+    void aRedeliveredRejectionOnlyExplainsOnce() {
+        String cardId = seedCard(List.of(11L));
+        String webhookEventId = "wh-" + UUID.randomUUID();
+
+        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*");
+        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*");
+
+        // 擋不住的是「使用者自己連點五次」——那是五個不同的 webhookEventId，
+        // 五則回覆。而那是對的：他按了五次，五次都給回饋才誠實。
+        assertThat(outboxRepository.findAll())
+                .filteredOn(e -> NoteService.EVENT_PUSH_TEXT_REQUESTED.equals(e.getEventType()))
+                .hasSize(1);
+    }
+
+    @Test
     @DisplayName("不是我們的按鈕 → 說一聲不認識，不要當成匯入請求")
     void foreignPostbacksAreLeftAlone() {
         assertThat(calendarSync.handlePostback(USER_ID, "wh-x", "action=somethingElse"))

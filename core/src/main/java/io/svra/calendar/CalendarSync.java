@@ -161,7 +161,7 @@ public class CalendarSync {
             log.info("匯入請求沒有對應到任何項目，忽略：cardId={}", cardId);
             return;
         }
-        String payload = serialize(new CalendarSyncPayload(lineUserId, cardId,
+        String payload = serialize(new CalendarSyncPayload(lineUserId, webhookEventId, cardId,
                 itemIds.stream().map(CalendarSyncPayload.Target::upsert).toList()));
 
         if (outboxRepository.insertIfAbsent(
@@ -196,11 +196,22 @@ public class CalendarSync {
         return itemId == null ? onCard : List.of(itemId);
     }
 
-    private void notifyPlain(String aggregateId, String lineUserId, String text) {
-        outboxRepository.save(OutboxEvent.pending(
-                aggregateId,
+    /**
+     * 說明性的回覆（按鈕失效、卡片對不上）。
+     *
+     * <p>帶冪等鍵，因為這裡的來源是 LINE 的 postback，而 LINE 是 at-least-once：
+     * 逾時重送同一個事件，使用者不該收到兩則一模一樣的說明。
+     *
+     * <p><b>擋不住的是「使用者自己連點五次」</b>——那會是五個不同的
+     * {@code webhookEventId}，五則回覆。而那是對的：他按了五次，
+     * 五次都給回饋才是誠實的，沉默才奇怪。
+     */
+    private void notifyPlain(String webhookEventId, String lineUserId, String text) {
+        outboxRepository.insertIfAbsent(
+                webhookEventId,
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serializePush(PushTextPayload.plain(lineUserId, text))));
+                serializePush(PushTextPayload.plain(lineUserId, text)),
+                "CALENDAR_NOTICE:" + webhookEventId);
     }
 
     /**
@@ -226,7 +237,7 @@ public class CalendarSync {
                 NoteService.EVENT_CALENDAR_SYNC_REQUESTED,
                 // anchorMessageId 為 null＝安靜地做。使用者剛剛才收到一份調整後的清單，
                 // 再推一則「行事曆也更新了」只是噪音，而且每則都在吃免費額度。
-                serialize(new CalendarSyncPayload(lineUserId, null, targets))));
+                serialize(new CalendarSyncPayload(lineUserId, aggregateId, null, targets))));
         log.info("已記下行事曆連動：{} 筆", targets.size());
     }
 

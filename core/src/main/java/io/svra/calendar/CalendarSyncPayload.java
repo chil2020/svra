@@ -6,6 +6,16 @@ import java.util.List;
  * 「把這幾筆的狀態同步到 Google 行事曆」。
  *
  * @param lineUserId      同步完成或失敗時要通知誰
+ * @param requestId       是什麼引發了這次同步：postback 的 {@code webhookEventId}，
+ *                        或指令的訊息 id。
+ *                        <p>🔴 <b>它的用途是讓「回覆」也有冪等鍵。</b>
+ *                        寫進行事曆這件事已經冪等了（決定性 event id 撞 409），
+ *                        但<b>回覆的推播沒有</b>——poller 在標記 SENT 之前掛掉重跑，
+ *                        Google 那端沒事，使用者卻會收到<b>兩張</b>「已加入行事曆」，
+ *                        而且各吃一次免費額度。
+ *                        <p>不能改用 {@code cardId} 當鍵：同一張卡上先按單筆、
+ *                        再按「全部加入」是兩次合法的請求，共用一個鍵會讓第二次
+ *                        沒有回覆。
  * @param cardId          使用者按的是<b>哪一張卡片</b>上的按鈕。
  *                        非 null＝這是他主動要求的，做完要用同一張卡的內容
  *                        回一份新版本給他；null＝這是指令改動引發的連動，
@@ -15,6 +25,7 @@ import java.util.List;
  */
 public record CalendarSyncPayload(
         String lineUserId,
+        String requestId,
         String cardId,
         List<Target> targets) {
 

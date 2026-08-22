@@ -18,7 +18,6 @@ import io.svra.note.NoteItemRepository;
 import io.svra.note.NoteService;
 import io.svra.notify.NoteNotifier;
 import io.svra.notify.PushTextPayload;
-import io.svra.outbox.OutboxEvent;
 import io.svra.outbox.OutboxEventHandler;
 import io.svra.outbox.OutboxEventRepository;
 
@@ -123,10 +122,13 @@ class CalendarSyncHandler implements OutboxEventHandler {
                         .formatted(sync.targets().size())
                         + "行事曆上那幾筆可能停在舊的內容，需要的話手動改一下。";
 
-        tx.executeWithoutResult(status -> outboxRepository.save(OutboxEvent.pending(
+        // 同樣帶鍵：判死與重試耗盡走的是同一個 onGiveUp，而外層那個交易若沒提交成功，
+        // 事件會留在 PENDING 被再撿一次——那時不該再推一則一樣的失敗通知。
+        tx.executeWithoutResult(status -> outboxRepository.insertIfAbsent(
                 sync.cardId() == null ? "calendar-sync" : sync.cardId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serialize(PushTextPayload.plain(sync.lineUserId(), text)))));
+                serialize(PushTextPayload.plain(sync.lineUserId(), text)),
+                "CALENDAR_FAILED:" + sync.requestId()));
         log.info("已寫下行事曆同步失敗的通知");
     }
 
@@ -189,7 +191,19 @@ class CalendarSyncHandler implements OutboxEventHandler {
         }
     }
 
-    /** 使用者主動按的才回覆；指令引發的連動安靜地做完。 */
+    /**
+     * 使用者主動按的才回覆；指令引發的連動安靜地做完。
+     *
+     * <p>🔴 <b>回覆要帶冪等鍵，因為 outbox 是 at-least-once（決策 3）。</b>
+     * 這個處理器整段跑完、第三段的交易也提交了，但 poller 在
+     * {@code markSent()} 之前掛掉——重跑時 Google 那端沒事
+     * （決定性 event id 撞 409 轉更新），<b>但這一行會再寫一筆推播</b>，
+     * 於是使用者收到兩張「已加入行事曆」，各吃一次免費額度。
+     *
+     * <p>我把外部寫入做成冪等的時候漏掉了回覆本身。指令那條路一直有
+     * {@code command_executions} 擋著同一件事，這條路沒有對應的東西——
+     * 而 {@code requestId} 剛好可以當那個鍵。
+     */
     private void replyIfRequested(CalendarSyncPayload sync) {
         if (sync.cardId() == null) {
             return;
@@ -197,10 +211,13 @@ class CalendarSyncHandler implements OutboxEventHandler {
         // 回的是那則訊息的<b>新版本</b>，不是「已加入 N 筆」的說明——
         // 跟決策 11 讓指令回覆變成調整後的清單是同一個判斷：清單本身就是最好的確認，
         // 而且新卡片上的按鈕會變成「已加入」，狀態一眼看得到。
-        outboxRepository.save(OutboxEvent.pending(
+        if (outboxRepository.insertIfAbsent(
                 sync.cardId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serialize(notifier.calendarSyncedCard(sync.lineUserId(), sync.cardId()))));
+                serialize(notifier.calendarSyncedCard(sync.lineUserId(), sync.cardId())),
+                "CALENDAR_REPLY:" + sync.requestId()) == 0) {
+            log.info("這次同步的回覆已經寫過了，不重複推播（outbox 是 at-least-once）");
+        }
     }
 
     private CalendarSyncPayload parse(String payload) {
