@@ -94,7 +94,7 @@ class CalendarSyncHandler implements OutboxEventHandler {
 
         // ── 第三段：短交易，把 event id 記下來，並把回覆寫進 outbox ──
         tx.executeWithoutResult(status -> {
-            persist(done);
+            persist(sync.lineUserId(), done);
             replyIfRequested(sync);
         });
     }
@@ -158,7 +158,10 @@ class CalendarSyncHandler implements OutboxEventHandler {
                 jobs.add(Job.remove(null, target.googleEventId()));
                 continue;
             }
-            NoteItem item = itemRepository.findById(target.itemId()).orElse(null);
+            // 🔴 一定要帶使用者：itemId 來自 postback 的 data，也就是裝置。
+            // 少了它，一個偽造的 postback 可以把別人的行程寫進這裡的行事曆。
+            NoteItem item = itemRepository
+                    .findByIdAndUser(sync.lineUserId(), target.itemId()).orElse(null);
             if (item == null) {
                 log.info("要同步的項目已經不在了，跳過：itemId={}", target.itemId());
                 continue;
@@ -182,12 +185,12 @@ class CalendarSyncHandler implements OutboxEventHandler {
      * <p>這一欄同時是卡片上按鈕文字的依據，所以拿掉的時候要寫回 null——
      * 不然使用者會看到一顆寫著「已加入・重新同步」、但實際上什麼都沒有的按鈕。
      */
-    private void persist(List<Job> done) {
+    private void persist(String lineUserId, List<Job> done) {
         for (Job job : done) {
             if (job.itemId() == null) {
                 continue;   // 指令刪除的那些，資料庫裡已經沒有這一列了
             }
-            itemRepository.findById(job.itemId())
+            itemRepository.findByIdAndUser(lineUserId, job.itemId())
                     .ifPresent(item -> item.markCalendarEvent(job.remove() ? null : job.eventId()));
         }
     }

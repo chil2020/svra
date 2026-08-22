@@ -105,7 +105,7 @@ class MultiOpCommandTest {
         when(itemRepository.findUpcoming(anyString(), any()))
                 .thenAnswer(inv -> List.copyOf(extraction.getItems()));
         // 第三段用 id 重新載入目標，回傳的就是同一批物件。
-        when(itemRepository.findAllById(any()))
+        when(itemRepository.findAllByIdAndUser(anyString(), any()))
                 .thenAnswer(inv -> List.copyOf(extraction.getItems()));
         // 沒執行過，而且這次搶到了。
         when(executionRepository.existsById(anyString())).thenReturn(false);
@@ -165,7 +165,7 @@ class MultiOpCommandTest {
     @DisplayName("解析期間那一筆被刪掉了 → 說出來，不要假裝做到了")
     void reportsTargetThatDisappearedDuringParsing() {
         // 第一段看到三筆，第三段重新載入時第二筆已經不在了
-        when(itemRepository.findAllById(any())).thenReturn(
+        when(itemRepository.findAllByIdAndUser(anyString(), any())).thenReturn(
                 List.of(extraction.getItems().get(0), extraction.getItems().get(2)));
 
         execute(delete(2));
@@ -190,7 +190,7 @@ class MultiOpCommandTest {
     @Test
     @DisplayName("引用的訊息對不回任何一批 → 指名項目的動作不執行，並說出來")
     void refusesTargetedOpsWhenQuoteCannotBeResolved() {
-        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.empty());
+        when(anchors.itemIdsFor(anyString(), anyString())).thenReturn(Optional.empty());
 
         executeQuoting("unknown-message", delete(1));
 
@@ -204,8 +204,8 @@ class MultiOpCommandTest {
     @DisplayName("引用的訊息還在，但那一筆已經被刪了 → 精確說是哪一筆，不要對看不見的資料動手")
     void reportsExactlyWhichQuotedItemIsGone() {
         // 錨點還在（那則訊息推播過），但項目本身已經不在了
-        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
-        when(itemRepository.findAllById(any())).thenReturn(List.of());
+        when(anchors.itemIdsFor(anyString(), anyString())).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
+        when(itemRepository.findAllByIdAndUser(anyString(), any())).thenReturn(List.of());
 
         executeQuoting("stale-message", delete(1));
 
@@ -221,7 +221,7 @@ class MultiOpCommandTest {
     @Test
     @DisplayName("引用對不上，但只是要看清單 → 照做。LIST 不指涉編號")
     void stillAnswersListWhenQuoteCannotBeResolved() {
-        when(anchors.itemIdsFor(anyString())).thenReturn(Optional.empty());
+        when(anchors.itemIdsFor(anyString(), anyString())).thenReturn(Optional.empty());
 
         executeQuoting("unknown-message",
                 new NoteCommand.Op(NoteCommand.Action.LIST, null, null, null, null, null));
@@ -253,7 +253,7 @@ class MultiOpCommandTest {
         NoteItem other = item(9L, "別則語音的項目");
         when(itemRepository.findUpcoming(anyString(), any()))
                 .thenReturn(List.of(other));   // 整體清單裡有別的東西
-        when(anchors.itemIdsFor("push-1")).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
+        when(anchors.itemIdsFor(USER_ID, "push-1")).thenReturn(Optional.of(List.of(1L, 2L, 3L)));
 
         executeQuoting("push-1", delete(1));
 

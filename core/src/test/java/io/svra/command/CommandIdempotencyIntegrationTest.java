@@ -73,6 +73,7 @@ class CommandIdempotencyIntegrationTest {
     @Autowired private NoteExtractionRepository extractionRepository;
     @Autowired private OutboxEventRepository outboxRepository;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     @Test
     @DisplayName("同一筆指令事件跑兩次 → 只刪一筆，而且只回覆一次")
@@ -154,6 +155,25 @@ class CommandIdempotencyIntegrationTest {
     private List<String> titlesOf(Long extractionId) {
         return inTransaction(() -> extractionRepository.findById(extractionId).orElseThrow()
                 .getOrderedItems().stream().map(NoteItem::getTitle).toList());
+    }
+
+    @Test
+    @DisplayName("執行紀錄要帶著使用者——不然「他下過哪些指令」永遠查不到")
+    void theExecutionRecordCarriesTheUser() {
+        Fixture fixture = seedThreeItems();
+        deleteFirstItem();
+
+        commandService.applyCommand(fixture.payload());
+
+        // 這張表原本只有一個 message id，而 message id 對不回 notes（指令不建 note）。
+        // 欄位加了卻沒有人填的話，症狀是「查詢永遠回空」而不是報錯。
+        assertThat(executedBy(fixture.commandMessageId())).isEqualTo(fixture.userId());
+    }
+
+    private String executedBy(String commandMessageId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT line_user_id FROM command_executions WHERE command_message_id = ?",
+                String.class, commandMessageId);
     }
 
     private long countReplies(String commandMessageId) {

@@ -154,12 +154,12 @@ public class NoteNotifier {
      */
     @Transactional(readOnly = true)
     public PushTextPayload calendarSyncedCard(String lineUserId, String cardId) {
-        List<Long> itemIds = anchors.itemIdsForCard(cardId).orElse(null);
+        List<Long> itemIds = anchors.itemIdsForCard(lineUserId, cardId).orElse(null);
         if (itemIds == null) {
             log.warn("匯入完成但找不到卡片錨點，退成純文字確認：cardId={}", cardId);
             return PushTextPayload.plain(lineUserId, HEAD_SYNCED);
         }
-        return card(lineUserId, itemRepository.findAllById(itemIds),
+        return card(lineUserId, itemRepository.findAllByIdAndUser(lineUserId, itemIds),
                 HEAD_SYNCED, FOOT_SYNCED, List.of());
     }
 

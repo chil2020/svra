@@ -50,11 +50,20 @@ public class MessageAnchors {
     }
 
     /**
-     * @return 那則訊息當時秀的項目 id，順序即編號；不是我們送出的訊息時為空
+     * @param lineUserId 🔴 <b>一定要帶，而且一定要進 where。</b>
+     *                   {@code lineMessageId} 來自 webhook 的 {@code quotedMessageId}——
+     *                   也就是<b>使用者的裝置</b>。LINE 會轉發並簽章，所以驗簽擋不住它：
+     *                   簽的是「這是 LINE 送來的」，不是「這個值是真的」。
+     *                   <p>而 LINE 的 message id <b>不是猜不到的</b>：實際資料裡的幾筆
+     *                   同前綴、隨時間遞增。改過的 client 送一個偽造的 quotedMessageId，
+     *                   就能拿到別人的項目清單，然後「刪掉第一筆」。
+     *                   <p>這一欄從 V7 就在表上了，只是查詢沒有用它。
+     * @return 那則訊息當時秀的項目 id，順序即編號；不是這個人的訊息時為空
      */
     @Transactional(readOnly = true)
-    public Optional<List<Long>> itemIdsFor(String lineMessageId) {
-        return repository.findById(lineMessageId).map(MessageAnchor::getItemIds);
+    public Optional<List<Long>> itemIdsFor(String lineUserId, String lineMessageId) {
+        return repository.findByLineMessageIdAndLineUserId(lineMessageId, lineUserId)
+                .map(MessageAnchor::getItemIds);
     }
 
     /**
@@ -64,11 +73,15 @@ public class MessageAnchors {
      * 引用回覆帶的是 LINE 的 message id，按鈕帶的是我們自己給的卡片 id
      * （為什麼要兩把，見 V10）。
      *
-     * @return 對不上時為空。卡片可能是重啟前的舊版本，或資料已經被清掉
+     * <p>同樣要帶使用者：postback 的 {@code data} 一樣是從裝置送上來的，
+     * 而卡片 id 雖然是 16 個隨機字元（猜不到），<b>「猜不到」不是一道防線</b>
+     * ——那正是 message id 那邊犯過的錯。
+     *
+     * @return 對不上時為空。卡片可能是重啟前的舊版本、資料已經被清掉，或不是這個人的
      */
     @Transactional(readOnly = true)
-    public Optional<List<Long>> itemIdsForCard(String cardId) {
-        return repository.findFirstByCardIdOrderByCreatedAtDesc(cardId)
+    public Optional<List<Long>> itemIdsForCard(String lineUserId, String cardId) {
+        return repository.findFirstByCardIdAndLineUserIdOrderByCreatedAtDesc(cardId, lineUserId)
                 .map(MessageAnchor::getItemIds);
     }
 }

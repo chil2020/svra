@@ -148,7 +148,7 @@ public class CalendarSync {
      */
     private void requestImport(String lineUserId, String webhookEventId, String replyToken,
             String cardId, Long itemId) {
-        List<Long> itemIds = resolve(cardId, itemId);
+        List<Long> itemIds = resolve(lineUserId, cardId, itemId);
         if (itemIds == null) {
             // 卡片對不上——可能是很久以前的訊息，資料已經不在了。
             // 沉默地什麼都不做的話，使用者只會看到按鈕沒反應（決策 17）。
@@ -190,8 +190,8 @@ public class CalendarSync {
      *
      * @return 卡片對不上時為 {@code null}
      */
-    private List<Long> resolve(String cardId, Long itemId) {
-        List<Long> onCard = anchors.itemIdsForCard(cardId).orElse(null);
+    private List<Long> resolve(String lineUserId, String cardId, Long itemId) {
+        List<Long> onCard = anchors.itemIdsForCard(lineUserId, cardId).orElse(null);
         if (onCard == null) {
             return null;
         }

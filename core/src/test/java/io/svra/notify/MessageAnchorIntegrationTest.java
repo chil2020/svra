@@ -55,7 +55,7 @@ class MessageAnchorIntegrationTest {
 
         anchors.record(messageId, null, USER_ID, shown);
 
-        assertThat(anchors.itemIdsFor(messageId))
+        assertThat(anchors.itemIdsFor(USER_ID, messageId))
                 .as("順序就是編號，錯一個位置就是刪錯一筆")
                 .contains(shown);
     }
@@ -71,8 +71,8 @@ class MessageAnchorIntegrationTest {
 
         // 引用回覆帶的是 LINE 的 message id，卡片按鈕帶的是我們自己給的 card id。
         // 兩把鑰匙必須開到同一份順序，否則「第三筆」跟「匯入這一筆」會指到不同東西。
-        assertThat(anchors.itemIdsForCard(cardId)).contains(shown);
-        assertThat(anchors.itemIdsFor(messageId)).contains(shown);
+        assertThat(anchors.itemIdsForCard(USER_ID, cardId)).contains(shown);
+        assertThat(anchors.itemIdsFor(USER_ID, messageId)).contains(shown);
     }
 
     @Test
@@ -84,13 +84,38 @@ class MessageAnchorIntegrationTest {
         // 所以多則純文字訊息可以並存而不會撞鍵
         anchors.record("anchor-" + UUID.randomUUID(), null, USER_ID, List.of(2L));
 
-        assertThat(anchors.itemIdsForCard("never-rendered")).isEmpty();
+        assertThat(anchors.itemIdsForCard(USER_ID, "never-rendered")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("🔴 別人的 message id 查不到我的錨點")
+    void anotherUsersMessageIdResolvesToNothing() {
+        String messageId = "anchor-" + UUID.randomUUID();
+        anchors.record(messageId, null, USER_ID, List.of(30L, 10L, 20L));
+
+        // quotedMessageId 來自使用者的裝置，而 LINE 的 message id 同前綴、隨時間遞增
+        // ——猜得到。少了這道防線，一個偽造的引用就能拿到別人的清單，
+        // 然後「刪掉第一筆」刪到別人的項目。
+        assertThat(anchors.itemIdsFor("U-someone-else", messageId)).isEmpty();
+        assertThat(anchors.itemIdsFor(USER_ID, messageId)).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("🔴 別人的 card id 也查不到")
+    void anotherUsersCardIdResolvesToNothing() {
+        String cardId = "card" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        anchors.record("anchor-" + UUID.randomUUID(), cardId, USER_ID, List.of(1L));
+
+        // 卡片 id 是 16 個隨機字元、猜不到——但「猜不到」不是一道防線，
+        // 那正是 message id 那邊犯過的錯。
+        assertThat(anchors.itemIdsForCard("U-someone-else", cardId)).isEmpty();
+        assertThat(anchors.itemIdsForCard(USER_ID, cardId)).isNotEmpty();
     }
 
     @Test
     @DisplayName("不是我們推播的訊息 → 查不到，讓呼叫端知道對不上")
     void unknownMessageHasNoAnchor() {
-        assertThat(anchors.itemIdsFor("never-pushed-" + UUID.randomUUID())).isEmpty();
+        assertThat(anchors.itemIdsFor(USER_ID, "never-pushed-" + UUID.randomUUID())).isEmpty();
     }
 
     @Test
@@ -108,6 +133,6 @@ class MessageAnchorIntegrationTest {
 
         anchors.record(messageId, null, USER_ID, List.of());
 
-        assertThat(anchors.itemIdsFor(messageId)).isEmpty();
+        assertThat(anchors.itemIdsFor(USER_ID, messageId)).isEmpty();
     }
 }

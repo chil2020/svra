@@ -238,7 +238,9 @@ public class NoteCommandService {
         //
         // 解析經過兩層：編號 →（快照）id → 現在的那一筆。中間那層是關鍵——
         // 第一段到現在隔著一次 LLM 呼叫，拿編號重算會指到另一個項目，id 不會漂。
-        Map<Long, NoteItem> byId = itemRepository.findAllById(
+        // 🔴 帶使用者：這些 id 來自錨點，而錨點是用使用者裝置送上來的 quotedMessageId
+        // 查出來的。錨點那一層已經擋過一次，這裡是第二道。
+        Map<Long, NoteItem> byId = itemRepository.findAllByIdAndUser(payload.lineUserId(),
                 prepared.items().stream().map(ItemSnapshot::id).toList())
                 .stream().collect(Collectors.toMap(NoteItem::getId, Function.identity()));
 
@@ -469,13 +471,15 @@ public class NoteCommandService {
      * 那是「確實地做錯事」，比報錯更糟（決策 17）。
      */
     private List<ItemSnapshot> quotedItems(CommandPayload payload) {
-        List<Long> ids = anchors.itemIdsFor(payload.quotedMessageId()).orElse(null);
+        List<Long> ids = anchors.itemIdsFor(payload.lineUserId(), payload.quotedMessageId())
+                .orElse(null);
         if (ids == null) {
             log.info("引用的訊息不是我推播的，或已經太舊：quoted={}", payload.quotedMessageId());
             return null;
         }
         // 錨點記的是 id，項目本身可能已經被刪掉——那些在 execute() 會回報「已經不在清單上」。
-        Map<Long, NoteItem> alive = itemRepository.findAllById(ids).stream()
+        Map<Long, NoteItem> alive = itemRepository
+                .findAllByIdAndUser(payload.lineUserId(), ids).stream()
                 .collect(Collectors.toMap(NoteItem::getId, Function.identity()));
         return ids.stream().map(id -> ItemSnapshot.at(id, alive.get(id))).toList();
     }
