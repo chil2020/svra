@@ -74,7 +74,8 @@ public class CalendarSync {
      * @return 這顆按鈕是不是我們的。不是的話呼叫端自己決定怎麼記
      */
     @Transactional
-    public boolean handlePostback(String lineUserId, String webhookEventId, String data) {
+    public boolean handlePostback(String lineUserId, String webhookEventId, String data,
+            String replyToken) {
         if (data == null || !data.startsWith(ACTION_PREFIX)) {
             return false;
         }
@@ -89,7 +90,7 @@ public class CalendarSync {
         // **按鈕長不長出來是排版，能不能執行是授權，兩件事不能共用同一個判斷。**
         if (!capability.canImportDirectly(lineUserId)) {
             log.warn("不在白名單的使用者送來匯入請求，已拒絕");
-            notifyPlain(webhookEventId, lineUserId,
+            notifyPlain(webhookEventId, lineUserId, replyToken,
                     "⚠️ 這顆按鈕已經失效了。說一聲「列出行程」，我給你一份新的清單。");
             return true;
         }
@@ -112,7 +113,7 @@ public class CalendarSync {
             log.warn("匯入按鈕沒有帶卡片 id，忽略：data={}", data);
             return true;
         }
-        requestImport(lineUserId, webhookEventId, cardId, itemId);
+        requestImport(lineUserId, webhookEventId, replyToken, cardId, itemId);
         return true;
     }
 
@@ -145,14 +146,14 @@ public class CalendarSync {
      * @param cardId         按鈕所在的那張卡，做完要用它重畫一份新的清單
      * @param itemId         要匯入哪一筆；{@code null} 代表「這張卡上全部」
      */
-    private void requestImport(String lineUserId, String webhookEventId,
+    private void requestImport(String lineUserId, String webhookEventId, String replyToken,
             String cardId, Long itemId) {
         List<Long> itemIds = resolve(cardId, itemId);
         if (itemIds == null) {
             // 卡片對不上——可能是很久以前的訊息，資料已經不在了。
             // 沉默地什麼都不做的話，使用者只會看到按鈕沒反應（決策 17）。
             log.info("匯入請求對不上任何卡片：cardId={}", cardId);
-            notifyPlain(webhookEventId, lineUserId,
+            notifyPlain(webhookEventId, lineUserId, replyToken,
                     "⚠️ 這張卡片我對不上了（可能太舊）。說一聲「列出行程」，"
                             + "我給你一份新的，上面的按鈕就能用。");
             return;
@@ -161,8 +162,8 @@ public class CalendarSync {
             log.info("匯入請求沒有對應到任何項目，忽略：cardId={}", cardId);
             return;
         }
-        String payload = serialize(new CalendarSyncPayload(lineUserId, webhookEventId, cardId,
-                itemIds.stream().map(CalendarSyncPayload.Target::upsert).toList()));
+        String payload = serialize(new CalendarSyncPayload(lineUserId, webhookEventId, replyToken,
+                cardId, itemIds.stream().map(CalendarSyncPayload.Target::upsert).toList()));
 
         if (outboxRepository.insertIfAbsent(
                 webhookEventId,
@@ -206,11 +207,13 @@ public class CalendarSync {
      * {@code webhookEventId}，五則回覆。而那是對的：他按了五次，
      * 五次都給回饋才是誠實的，沉默才奇怪。
      */
-    private void notifyPlain(String webhookEventId, String lineUserId, String text) {
+    private void notifyPlain(String webhookEventId, String lineUserId, String replyToken,
+            String text) {
         outboxRepository.insertIfAbsent(
                 webhookEventId,
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serializePush(PushTextPayload.plain(lineUserId, text)),
+                // 說明性的回覆是對按鈕的即時反應，token 一定還活著——這一則是免費的。
+                serializePush(PushTextPayload.plain(lineUserId, text).repliedWith(replyToken)),
                 "CALENDAR_NOTICE:" + webhookEventId);
     }
 
@@ -237,7 +240,8 @@ public class CalendarSync {
                 NoteService.EVENT_CALENDAR_SYNC_REQUESTED,
                 // anchorMessageId 為 null＝安靜地做。使用者剛剛才收到一份調整後的清單，
                 // 再推一則「行事曆也更新了」只是噪音，而且每則都在吃免費額度。
-                serialize(new CalendarSyncPayload(lineUserId, aggregateId, null, targets))));
+                serialize(new CalendarSyncPayload(
+                        lineUserId, aggregateId, null, null, targets))));
         log.info("已記下行事曆連動：{} 筆", targets.size());
     }
 

@@ -70,8 +70,8 @@ class CalendarImportIdempotencyIntegrationTest {
         String webhookEventId = "wh-" + UUID.randomUUID();
 
         // 同一次點擊，LINE 逾時重送。webhookEventId 在重送時不變。
-        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=" + cardId + "&i=*");
-        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=" + cardId + "&i=*");
+        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
+        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         // 行事曆本身不會多一筆（決定性 event id 擋著），但少了這一層，
         // 使用者會收到兩則「已加入行事曆」，而且各吃一次免費推播額度。
@@ -84,7 +84,7 @@ class CalendarImportIdempotencyIntegrationTest {
         String cardId = seedCard(List.of(30L, 10L, 20L));
 
         calendarSync.handlePostback(USER_ID, "wh-" + UUID.randomUUID(),
-                "a=cal&c=" + cardId + "&i=*");
+                "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         assertThat(payloadOf(cardId))
                 // 使用者按的是眼前那張卡上的按鈕，掃進別則語音的行程是他沒要求過的事
@@ -97,7 +97,7 @@ class CalendarImportIdempotencyIntegrationTest {
         String cardId = seedCard(List.of(41L, 42L));
 
         calendarSync.handlePostback(USER_ID, "wh-" + UUID.randomUUID(),
-                "a=cal&c=" + cardId + "&i=42");
+                "a=cal&c=" + cardId + "&i=42", "reply-token");
 
         assertThat(payloadOf(cardId)).contains("\"itemId\":42").doesNotContain("\"itemId\":41");
     }
@@ -107,7 +107,7 @@ class CalendarImportIdempotencyIntegrationTest {
     void unknownCardTellsTheUserInsteadOfDoingNothing() {
         String webhookEventId = "wh-" + UUID.randomUUID();
 
-        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=never-existed&i=*");
+        calendarSync.handlePostback(USER_ID, webhookEventId, "a=cal&c=never-existed&i=*", "reply-token");
 
         assertThat(syncEvents(webhookEventId)).isEmpty();
         assertThat(outboxRepository.findAll())
@@ -126,7 +126,7 @@ class CalendarImportIdempotencyIntegrationTest {
         // 某人今天在名單裡、明天被拿掉，他手機裡那則舊卡片上的按鈕還在。
         // 憑證只有一份，處理下去就是把別人的行程寫進擁有者的行事曆。
         calendarSync.handlePostback("U-someone-else", webhookEventId,
-                "a=cal&c=" + cardId + "&i=*");
+                "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         assertThat(syncEvents(webhookEventId)).isEmpty();
         assertThat(outboxRepository.findAll())
@@ -141,8 +141,8 @@ class CalendarImportIdempotencyIntegrationTest {
         String cardId = seedCard(List.of(11L));
         String webhookEventId = "wh-" + UUID.randomUUID();
 
-        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*");
-        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*");
+        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
+        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         // 擋不住的是「使用者自己連點五次」——那是五個不同的 webhookEventId，
         // 五則回覆。而那是對的：他按了五次，五次都給回饋才誠實。
@@ -154,7 +154,7 @@ class CalendarImportIdempotencyIntegrationTest {
     @Test
     @DisplayName("不是我們的按鈕 → 說一聲不認識，不要當成匯入請求")
     void foreignPostbacksAreLeftAlone() {
-        assertThat(calendarSync.handlePostback(USER_ID, "wh-x", "action=somethingElse"))
+        assertThat(calendarSync.handlePostback(USER_ID, "wh-x", "action=somethingElse", "reply-token"))
                 .isFalse();
         assertThat(outboxRepository.findAll()).isEmpty();
     }

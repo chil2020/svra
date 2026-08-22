@@ -91,7 +91,10 @@ public class LineWebhookController {
                     event.source().userId(),
                     event.message().id(),
                     event.message().text(),
-                    event.message().quotedMessageId());
+                    event.message().quotedMessageId(),
+                    // 帶著 reply token：指令的回覆用它送不計額度，而額度是整個
+                    // 官方帳號共用的，開放給多人時它直接決定能服務幾個人。
+                    event.replyToken());
         } else if (event.isPostback()) {
             // 卡片上的按鈕。跟語音與指令一樣只寫意圖，真正呼叫 Google 的是 poller——
             // 「全部加入」可能是好幾次 HTTP 呼叫，而 webhook 不能做慢事（決策 1）。
@@ -99,7 +102,7 @@ public class LineWebhookController {
             // data 的格式不在這裡解析：那是 calendar 模組自己的事，
             // 多一種按鈕時 webhook 不必跟著改。
             if (!calendarSync.handlePostback(event.source().userId(),
-                    event.webhookEventId(), event.postback().data())) {
+                    event.webhookEventId(), event.postback().data(), event.replyToken())) {
                 log.debug("不認識的 postback，忽略");
             }
         } else {

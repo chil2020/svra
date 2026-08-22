@@ -76,10 +76,13 @@ class LineWebhookControllerTest {
                 {"events":[{
                   "type":"message",
                   "source":{"type":"user","userId":"U4af4980629"},
+                  "replyToken":"rt-cmd",
                   "message":{"id":"999","type":"text","text":"刪掉第二項"}
                 }]}""").andExpect(status().isOk());
 
-        verify(commandService).recordCommand("U4af4980629", "999", "刪掉第二項", null);
+        // reply token 一起傳下去：指令的回覆用它送不計免費額度，而額度是整個
+        // 官方帳號共用的——漏傳不會壞掉，只會安靜地多花錢。
+        verify(commandService).recordCommand("U4af4980629", "999", "刪掉第二項", null, "rt-cmd");
         verify(noteService, never()).recordIncoming(anyString(), anyString());
     }
 
@@ -90,11 +93,12 @@ class LineWebhookControllerTest {
                 {"events":[{
                   "type":"message",
                   "source":{"type":"user","userId":"U4af4980629"},
+                  "replyToken":"rt-cmd",
                   "message":{"id":"999","type":"text","text":"改成三點",
                              "quotedMessageId":"888"}
                 }]}""").andExpect(status().isOk());
 
-        verify(commandService).recordCommand("U4af4980629", "999", "改成三點", "888");
+        verify(commandService).recordCommand("U4af4980629", "999", "改成三點", "888", "rt-cmd");
     }
 
     @Test
@@ -111,9 +115,10 @@ class LineWebhookControllerTest {
 
         // postback 沒有 message id，冪等只能靠 webhookEventId——它在重送時不變。
         // 傳錯或漏傳的話，逾時重送就會讓使用者收到兩則「已加入行事曆」。
-        verify(calendarSync).handlePostback("U4af4980629", "01HXPOSTBACK", "a=cal&c=abc123&i=*");
+        verify(calendarSync).handlePostback(
+                "U4af4980629", "01HXPOSTBACK", "a=cal&c=abc123&i=*", "rt-abc");
         verify(commandService, never())
-                .recordCommand(anyString(), anyString(), anyString(), any());
+                .recordCommand(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -128,13 +133,15 @@ class LineWebhookControllerTest {
                   "postback":{"data":"a=cal&c=abc123&i=*"}
                 }]}""").andExpect(status().isOk());
 
-        verify(calendarSync, never()).handlePostback(anyString(), anyString(), anyString());
+        verify(calendarSync, never())
+                .handlePostback(anyString(), anyString(), anyString(), any());
     }
 
     @Test
     @DisplayName("不是我們的 postback → calendar 說不認識，webhook 照樣回 200")
     void unknownPostbackStillReturns200() throws Exception {
-        when(calendarSync.handlePostback(anyString(), anyString(), anyString())).thenReturn(false);
+        when(calendarSync.handlePostback(anyString(), anyString(), anyString(), any()))
+                .thenReturn(false);
 
         postWebhook("""
                 {"events":[{

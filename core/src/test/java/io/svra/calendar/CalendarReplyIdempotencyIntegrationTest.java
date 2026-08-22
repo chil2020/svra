@@ -102,7 +102,7 @@ class CalendarReplyIdempotencyIntegrationTest {
         String cardId = seedCard(List.of(itemId));
         String requestId = "wh-" + UUID.randomUUID();
 
-        String payload = serialize(new CalendarSyncPayload(USER_ID, requestId, cardId,
+        String payload = serialize(new CalendarSyncPayload(USER_ID, requestId, null, cardId,
                 List.of(CalendarSyncPayload.Target.upsert(itemId))));
 
         // poller 在 markSent() 之前掛掉，事件留在 PENDING，下一輪再撿一次。
@@ -130,9 +130,9 @@ class CalendarReplyIdempotencyIntegrationTest {
 
         // 冪等鍵刻意用 requestId 而不是 cardId：這是兩次合法的請求，
         // 共用一個鍵會讓第二次沒有回覆，而使用者按了卻沒反應。
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-single", cardId,
+        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-single", null, cardId,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-bulk", cardId,
+        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "wh-bulk", null, cardId,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
 
         assertThat(replies()).hasSize(2);
@@ -143,7 +143,7 @@ class CalendarReplyIdempotencyIntegrationTest {
     void commandDrivenSyncStaysSilent() {
         Long itemId = seedItem();
 
-        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "cmd-1", null,
+        handler.handle(serialize(new CalendarSyncPayload(USER_ID, "cmd-1", null, null,
                 List.of(CalendarSyncPayload.Target.upsert(itemId)))));
 
         assertThat(replies()).isEmpty();

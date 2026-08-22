@@ -214,7 +214,8 @@ class CalendarSyncHandler implements OutboxEventHandler {
         if (outboxRepository.insertIfAbsent(
                 sync.cardId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serialize(notifier.calendarSyncedCard(sync.lineUserId(), sync.cardId())),
+                serialize(notifier.calendarSyncedCard(sync.lineUserId(), sync.cardId())
+                        .repliedWith(sync.replyToken())),
                 "CALENDAR_REPLY:" + sync.requestId()) == 0) {
             log.info("這次同步的回覆已經寫過了，不重複推播（outbox 是 at-least-once）");
         }

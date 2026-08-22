@@ -120,7 +120,7 @@ class CommandIdempotencyIntegrationTest {
     private record Fixture(String userId, Long extractionId, String commandMessageId) {
         NoteCommandService.CommandPayload payload() {
             return new NoteCommandService.CommandPayload(
-                    userId, commandMessageId, "刪掉第一筆", null);
+                    userId, commandMessageId, "刪掉第一筆", null, null);
         }
     }
 

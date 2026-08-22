@@ -19,8 +19,8 @@ public record LineWebhookPayload(List<Event> events) {
      *                       postback 沒有 message id，而語音與文字指令用的是那個
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Event(String type, String webhookEventId, Source source, Message message,
-            Postback postback) {
+    public record Event(String type, String webhookEventId, String replyToken,
+            Source source, Message message, Postback postback) {
 
         /** 文字訊息＝使用者在下指令（刪除、修改行程等）。 */
         public boolean isTextMessage() {

@@ -16,6 +16,8 @@ import java.util.List;
  *                        <p>不能改用 {@code cardId} 當鍵：同一張卡上先按單筆、
  *                        再按「全部加入」是兩次合法的請求，共用一個鍵會讓第二次
  *                        沒有回覆。
+ * @param replyToken      匯入完成的回覆用它送，<b>不計入月額度</b>。實測從按下按鈕
+ *                        到回覆約 2 秒，token 撐得住。指令引發的連動不回覆，為 null
  * @param cardId          使用者按的是<b>哪一張卡片</b>上的按鈕。
  *                        非 null＝這是他主動要求的，做完要用同一張卡的內容
  *                        回一份新版本給他；null＝這是指令改動引發的連動，
@@ -26,6 +28,7 @@ import java.util.List;
 public record CalendarSyncPayload(
         String lineUserId,
         String requestId,
+        String replyToken,
         String cardId,
         List<Target> targets) {
 

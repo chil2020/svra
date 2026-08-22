@@ -92,7 +92,7 @@ class IdempotencyIntegrationTest {
         String messageId = "cmd-" + UUID.randomUUID();
 
         Outcome outcome = raceOnSameMessage(8, () -> {
-            commandService.recordCommand(USER_ID, messageId, "刪掉第一筆", null);
+            commandService.recordCommand(USER_ID, messageId, "刪掉第一筆", null, null);
             return true;
         });
 

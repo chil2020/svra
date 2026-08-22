@@ -1,10 +1,13 @@
 package io.svra.notify;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.ObjectMapper;
 
 import io.svra.line.LinePushClient;
+import io.svra.line.ReplyTokenExpiredException;
 import io.svra.note.NoteService;
 import io.svra.outbox.OutboxEventHandler;
 
@@ -16,6 +19,8 @@ import io.svra.outbox.OutboxEventHandler;
  */
 @Component
 class PushTextRequestedHandler implements OutboxEventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(PushTextRequestedHandler.class);
 
     private final LinePushClient pushClient;
     private final ObjectMapper objectMapper;
@@ -36,13 +41,38 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     @Override
     public void handle(String payload) {
         PushTextPayload push = objectMapper.readValue(payload, PushTextPayload.class);
+        String lineMessageId = send(push);
+        // 只有送出去之後才拿得到 messageId，錨點也只能在這裡記——
+        // 少了它，使用者引用這則回覆再改一次就會對不上（見 MessageAnchors）。
+        // reply 與 push 都會回傳 messageId，所以這一行兩條路共用。
+        anchors.record(lineMessageId, push.cardId(), push.lineUserId(), push.anchoredItemIds());
+    }
+
+    /**
+     * 有 token 就先試 reply（<b>不計入月額度</b>），失效才退回推播。
+     *
+     * <p>🔴 <b>只接 {@link ReplyTokenExpiredException}，不接其他失敗。</b>
+     * token 失效重試一萬次也不會好，該立刻改用推播——使用者照樣收得到，
+     * 只是吃掉一則額度。而網路抖動或 LINE 的 5xx 要往外拋讓 outbox 退避重試，
+     * 因為重試時 token 可能還活著，那一則就還是免費的。
+     *
+     * <p>一律接住改推播的話，一次網路抖動就白白放棄了免費的那條路；
+     * 一律重試的話，token 單次使用、五次必定全敗——<b>使用者完全收不到回覆</b>。
+     */
+    private String send(PushTextPayload push) {
+        if (push.replyToken() != null) {
+            try {
+                return push.isCard()
+                        ? pushClient.replyFlex(push.replyToken(), push.text(), push.flexJson())
+                        : pushClient.replyText(push.replyToken(), push.text());
+            } catch (ReplyTokenExpiredException expired) {
+                log.info("reply token 已失效，改用推播（會吃一則免費額度）：{}", expired.getMessage());
+            }
+        }
         // 卡片與純文字走同一種事件：差別只在「這則訊息長什麼樣」，
         // 而那是 payload 的內容，不是另一種意圖。
-        String lineMessageId = push.isCard()
+        return push.isCard()
                 ? pushClient.pushFlex(push.lineUserId(), push.text(), push.flexJson())
                 : pushClient.pushText(push.lineUserId(), push.text());
-        // 只有推出去之後才拿得到 messageId，錨點也只能在這裡記——
-        // 少了它，使用者引用這則回覆再改一次就會對不上（見 MessageAnchors）。
-        anchors.record(lineMessageId, push.cardId(), push.lineUserId(), push.anchoredItemIds());
     }
 }

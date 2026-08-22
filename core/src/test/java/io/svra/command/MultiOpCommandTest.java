@@ -123,13 +123,13 @@ class MultiOpCommandTest {
 
     private void execute(NoteCommand.Op... ops) {
         when(parser.parse(anyString(), any())).thenReturn(new NoteCommand(List.of(ops), null, null));
-        service.applyCommand(new NoteCommandService.CommandPayload(USER_ID, "m1", "指令", null));
+        service.applyCommand(new NoteCommandService.CommandPayload(USER_ID, "m1", "指令", null, null));
     }
 
     private void executeQuoting(String quotedMessageId, NoteCommand.Op... ops) {
         when(parser.parse(anyString(), any())).thenReturn(new NoteCommand(List.of(ops), null, null));
         service.applyCommand(new NoteCommandService.CommandPayload(
-                USER_ID, "m1", "指令", quotedMessageId));
+                USER_ID, "m1", "指令", quotedMessageId, null));
     }
 
     private static NoteCommand.Op delete(int index) {

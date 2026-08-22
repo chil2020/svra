@@ -93,13 +93,13 @@ public class NoteCommandService {
      */
     @Transactional
     public void recordCommand(String lineUserId, String commandMessageId,
-            String text, String quotedMessageId) {
+            String text, String quotedMessageId, String replyToken) {
         // 🔴 指令是唯一沒有其他去重機制的入口：語音有 notes 的唯一約束擋著，
         // 文字訊息不建 note，只寫一筆 outbox。沒有冪等鍵，LINE 重送就執行兩次。
         String payload;
         try {
             payload = objectMapper.writeValueAsString(new CommandPayload(
-                    lineUserId, commandMessageId, text, quotedMessageId));
+                    lineUserId, commandMessageId, text, quotedMessageId, replyToken));
         } catch (JacksonException e) {
             throw new IllegalStateException("序列化指令 payload 失敗", e);
         }
@@ -114,12 +114,18 @@ public class NoteCommandService {
         }
     }
 
-    /** 存進 outbox 的指令內容。 */
+    /**
+     * 存進 outbox 的指令內容。
+     *
+     * @param replyToken 解析要跑 LLM（實測約 7 秒），而 reply token 撐得住那麼久——
+     *                   所以指令的回覆送得出免費的那一種。失效才退回推播。
+     */
     public record CommandPayload(
             String lineUserId,
             String commandMessageId,
             String text,
-            String quotedMessageId) {
+            String quotedMessageId,
+            String replyToken) {
     }
 
     /**
@@ -192,7 +198,7 @@ public class NoteCommandService {
         outboxRepository.save(OutboxEvent.pending(
                 payload.commandMessageId(),
                 NoteService.EVENT_PUSH_TEXT_REQUESTED,
-                serialize(outcome.reply())));
+                serialize(outcome.reply().repliedWith(payload.replyToken()))));
 
         // 🔴 行事曆的連動也寫在<b>這個</b>交易裡，理由跟回覆完全一樣。
         // 拆出去的話，指令回滾而同步意圖留下，行事曆會被改成一個資料庫裡不存在的樣子；
