@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,14 @@ class IdempotencyIntegrationTest {
 
     private static final String USER_ID = "U4af4980629";
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired
     private NoteService noteService;
 
@@ -63,6 +72,11 @@ class IdempotencyIntegrationTest {
 
     @Autowired
     private OutboxEventRepository outboxRepository;
+
+    @BeforeEach
+    void ensureUserExists() {
+        users.ensureExists(USER_ID);
+    }
 
     @Test
     @DisplayName("同一則語音被兩個執行緒同時收到 → 只留一筆 note、一筆 outbox，且沒有例外外洩")

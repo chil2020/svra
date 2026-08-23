@@ -12,7 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import io.svra.calendar.CalendarSync;
-import io.svra.notify.Blocklist;
+import io.svra.user.Users;
 import io.svra.notify.Greetings;
 import io.svra.command.NoteCommandService;
 import io.svra.line.LineProperties;
@@ -74,7 +74,7 @@ class WebhookSecurityTest {
     private Greetings greetings;
 
     @MockitoBean
-    private Blocklist blocklist;
+    private Users users;
 
     @Test
     @DisplayName("簽章正確 → 200")

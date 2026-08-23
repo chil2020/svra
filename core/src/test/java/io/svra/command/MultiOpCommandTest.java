@@ -24,7 +24,7 @@ import io.svra.calendar.CalendarSync;
 import io.svra.calendar.CalendarSyncPayload;
 import io.svra.line.LinePushClient;
 import io.svra.llm.LlmRateLimiter;
-import io.svra.notify.Blocklist;
+import io.svra.user.Users;
 import io.svra.notify.CalendarCapability;
 import io.svra.notify.CardRenderer;
 import io.svra.notify.MessageAnchors;
@@ -73,7 +73,7 @@ class MultiOpCommandTest {
     @Mock LinePushClient pushClient;
     /** 這裡的使用者當成授權過的——行事曆連動正是這些測試在驗的東西。 */
     @Mock CalendarCapability calendarCapability;
-    @Mock Blocklist blocklist;
+    @Mock Users users;
     @Mock PlatformTransactionManager transactionManager;
 
     private NoteCommandService service;
@@ -85,7 +85,7 @@ class MultiOpCommandTest {
         // 正是這些測試在驗的東西，換成 mock 就等於驗一個 stub。
         NoteNotifier notifier = new NoteNotifier(noteRepository, extractionRepository,
                 itemRepository, pushClient, anchors,
-                new CardRenderer(objectMapper, calendarCapability), blocklist);
+                new CardRenderer(objectMapper, calendarCapability), users);
 
         service = new NoteCommandService(noteRepository, extractionRepository, itemRepository,
                 executionRepository,

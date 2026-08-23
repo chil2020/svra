@@ -18,6 +18,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriUtils;
 
 import io.svra.outbox.OutboxPermanentFailureException;
+import io.svra.user.Credentials;
+import io.svra.user.GoogleAuthorization;
 
 /**
  * 對 Google Calendar API 的最小呼叫面：寫一筆、改一筆、刪一筆。
@@ -52,12 +54,30 @@ class GoogleCalendarClient {
     private final RestClient restClient;
     private final GoogleTokenProvider tokenProvider;
     private final CalendarProperties properties;
+    private final Credentials credentials;
 
     GoogleCalendarClient(RestClient.Builder builder, GoogleTokenProvider tokenProvider,
-            CalendarProperties properties) {
+            CalendarProperties properties, Credentials credentials) {
         this.restClient = builder.build();
         this.tokenProvider = tokenProvider;
         this.properties = properties;
+        this.credentials = credentials;
+    }
+
+    /**
+     * 這個使用者的授權——寫進<b>他自己</b>的行事曆要用的 token 與 calendarId。
+     *
+     * <p>🔴 <b>每一次呼叫都要解析一次，不能提到欄位裡。</b>那正是原本的形狀
+     * （一個 {@code properties.calendarId()}），而它的意思是「所有人的行程都寫進
+     * 同一本行事曆」。多人使用時那不是設定錯誤，是<b>把別人的行程洩漏給第一個授權的人</b>。
+     *
+     * <p>沒有授權卻走到這裡，代表 {@code CalendarCapability} 說了他可以直接匯入、
+     * 而憑證在那之後被撤銷了。判永久失敗——重試不會讓授權回來，
+     * 而使用者會收到一則說得清楚的通知。
+     */
+    private GoogleAuthorization authorizationFor(String lineUserId) {
+        return credentials.find(lineUserId).orElseThrow(() -> new CalendarAuthorizationException(
+                "這個使用者沒有有效的行事曆授權，無法直接寫入"));
     }
 
     /**
@@ -75,12 +95,13 @@ class GoogleCalendarClient {
      * @param timeSpecified 使用者有沒有講出幾點。{@code TRUE} 是定時事件，
      *                      其餘（{@code FALSE} 或 v8 之前的舊資料）是全天事件
      */
-    void upsert(String eventId, String summary, String detail,
+    void upsert(String lineUserId, String eventId, String summary, String detail,
             Instant occursAt, Boolean timeSpecified) {
+        GoogleAuthorization auth = authorizationFor(lineUserId);
         Map<String, Object> body = eventBody(eventId, summary, detail, occursAt, timeSpecified);
 
-        String path = "/calendars/" + encode(properties.calendarId()) + "/events";
-        boolean inserted = withRetryOnUnauthorized(token -> restClient.post()
+        String path = "/calendars/" + encode(auth.calendarId()) + "/events";
+        boolean inserted = withRetryOnUnauthorized(lineUserId, auth, token -> restClient.post()
                 .uri(BASE + path)
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -102,7 +123,7 @@ class GoogleCalendarClient {
             return;
         }
 
-        withRetryOnUnauthorized(token -> restClient.put()
+        withRetryOnUnauthorized(lineUserId, auth, token -> restClient.put()
                 .uri(BASE + path + "/" + encode(eventId))
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -124,9 +145,10 @@ class GoogleCalendarClient {
      * 當成失敗的話，使用者在 Google 端先手動刪掉的那些，會讓同步事件一路重試到放棄，
      * 然後推一則沒有意義的失敗通知給他。
      */
-    void delete(String eventId) {
-        withRetryOnUnauthorized(token -> restClient.delete()
-                .uri(BASE + "/calendars/" + encode(properties.calendarId())
+    void delete(String lineUserId, String eventId) {
+        GoogleAuthorization auth = authorizationFor(lineUserId);
+        withRetryOnUnauthorized(lineUserId, auth, token -> restClient.delete()
+                .uri(BASE + "/calendars/" + encode(auth.calendarId())
                         + "/events/" + encode(eventId))
                 .header("Authorization", "Bearer " + token)
                 .exchange((request, response) -> {
@@ -212,15 +234,16 @@ class GoogleCalendarClient {
      * 走不到這裡。走到了代表<b>我們對到期時刻的認知是錯的</b>——token 被提前撤銷，
      * 或機器的時鐘跟 Google 對不上。這種時候相信對方的 401，不要相信自己的快取。
      */
-    private <T> T withRetryOnUnauthorized(java.util.function.Function<String, T> call) {
+    private <T> T withRetryOnUnauthorized(String lineUserId, GoogleAuthorization auth,
+            java.util.function.Function<String, T> call) {
         try {
-            return call.apply(tokenProvider.accessToken());
+            return call.apply(tokenProvider.accessToken(lineUserId, auth));
         } catch (CalendarAuthorizationException expired) {
             log.warn("token 還沒到期卻被拒，換一顆再試一次");
-            tokenProvider.invalidate();
+            tokenProvider.invalidate(lineUserId);
             // 換完還是被拒就讓它往外拋——那代表 refresh token 本身沒了，不是這顆過期。
             // 這一次不再接：接住只會變成無限換發。
-            return call.apply(tokenProvider.accessToken());
+            return call.apply(tokenProvider.accessToken(lineUserId, auth));
         }
     }
 

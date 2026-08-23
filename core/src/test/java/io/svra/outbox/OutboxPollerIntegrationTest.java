@@ -62,6 +62,14 @@ class OutboxPollerIntegrationTest {
     private static final String FINE = "TEST_ALWAYS_SUCCEEDS";
     private static final String DOOMED = "TEST_PERMANENTLY_FAILS";
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired
     private OutboxPoller poller;
 
@@ -203,6 +211,7 @@ class OutboxPollerIntegrationTest {
     // ── 工具 ────────────────────────────────────────────────────────
 
     private OutboxEvent save(String eventType) {
+        users.ensureExists("U-test");
         return outboxRepository.save(OutboxEvent.pending(
                 UUID.randomUUID().toString(), eventType, "U-test", "{}"));
     }

@@ -91,3 +91,26 @@ paths = [
   '''core/src/test/java/io/svra/security/LineSignatureTest\.java''',
   '''core/src/test/java/io/svra/security/WebhookSecurityTest\.java''',
 ]
+
+# ── 測試用的加密 fixture（決策 32 帶進來的） ─────────────────────────
+# 兩個值，都不通往任何東西：
+#
+#   c3ZyYS10ZXN0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=
+#     → base64 解出來是 "svra-test-key-do-not-use-in-prod"。
+#       它是一句話，不是隨機值——刻意這樣選，就是為了讓看到的人一眼確定它是假的。
+#
+#   1//0abcdefghijklmnop
+#     → SecretCipherTest 用來驗加解密來回的假 token。**保留真實的形狀是有價值的**：
+#       它讓讀測試的人看得出這裡保護的到底是什麼東西。
+#
+# 🔴 用「值」而不是「路徑」放行，是刻意的。整批放行 core/src/test/ 的話，
+# 哪天有人把真憑證貼進某支測試，掃描會安靜地放過去——**而測試檔跟正式碼一樣會進 git**。
+# 鎖成兩個字面值，新的假憑證就必須自己來這裡登記一次。
+#
+# （上一條白名單的教訓也在同一個方向：鎖完整路徑會隨重構失效，而且不會有人通知。）
+[[allowlists]]
+description = "加密測試的假金鑰與假 token（不通往任何服務）"
+regexes = [
+  '''c3ZyYS10ZXN0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=''',
+  '''1//0abcdefghijklmnop''',
+]

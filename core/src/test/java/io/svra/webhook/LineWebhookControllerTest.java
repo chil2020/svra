@@ -10,7 +10,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import io.svra.calendar.CalendarSync;
-import io.svra.notify.Blocklist;
+import io.svra.user.Users;
 import io.svra.notify.Greetings;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
@@ -51,7 +51,7 @@ class LineWebhookControllerTest {
     private Greetings greetings;
 
     @MockitoBean
-    private Blocklist blocklist;
+    private Users users;
 
     /** 保留幾個不使用的欄位，驗證寬鬆解析。 */
     private static final String AUDIO_EVENT_BODY = """
@@ -175,7 +175,7 @@ class LineWebhookControllerTest {
         // 不知道可以引用訊息修改、不知道有匯入按鈕。
         verify(greetings).welcome("U4af4980629", "01HFOLLOW", "rt-follow");
         // 封鎖過再回來的人，標記不清掉就會變成永遠收不到訊息的幽靈
-        verify(blocklist).unblock("U4af4980629");
+        verify(users).unblock("U4af4980629");
     }
 
     @Test
@@ -188,7 +188,7 @@ class LineWebhookControllerTest {
                   "source":{"type":"user","userId":"U4af4980629"}
                 }]}""").andExpect(status().isOk());
 
-        verify(blocklist).block("U4af4980629");
+        verify(users).block("U4af4980629");
         verify(greetings, never()).welcome(anyString(), anyString(), any());
     }
 

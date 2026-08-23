@@ -48,6 +48,14 @@ class DeliveryIdempotencyIntegrationTest {
     private static final String USER_ID = "U4af4980629";
     private static final String FLEX = "{\"type\":\"bubble\"}";
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired
     private PushTextRequestedHandler handler;
 
@@ -64,6 +72,7 @@ class DeliveryIdempotencyIntegrationTest {
     @BeforeEach
     void stubPush() {
         when(pushClient.pushFlex(anyString(), anyString(), anyString())).thenReturn("msg-1");
+        users.ensureExists(USER_ID);
     }
 
     @Test

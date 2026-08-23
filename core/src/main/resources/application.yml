@@ -94,6 +94,18 @@ svra:
     message-anchors: ${RETENTION_MESSAGE_ANCHORS:180d}
     # 清理是維護不是業務，挑一個沒有人在用的時段。
     cron: ${RETENTION_CRON:0 0 4 * * *}
+  secrets:
+    # 🔴 資料庫裡的 refresh token 用它加密（AES-256-GCM）。
+    #
+    # 產一把：openssl rand -base64 32
+    #
+    # 弄丟它 = 所有使用者都要重新授權，因為密文再也解不開。
+    # 換一把也一樣——GCM 會在解密時就爆，而錯誤訊息會直說是這件事。
+    #
+    # 留白是合法的：那代表這個部署所有人走預填連結、沒有憑證要存（決策 27）。
+    # 但 oauth-user-ids 有人卻沒設金鑰，啟動時會印一行 error——
+    # 那個組合的症狀是「某幾個人的按鈕按下去沒反應」，比整體壞掉更難查。
+    encryption-key: ${SVRA_ENCRYPTION_KEY:}
   llm:
     # 同一段逐字稿重抽不必再打模型一次。地端沒有金錢成本，但一次抽取 12 秒起跳，
     # 而 eval 與重跑都會一再送進同樣的輸入。
@@ -103,12 +115,17 @@ svra:
     rate-limit: 30
     rate-limit-window: 1m
   calendar:
-    # 🔴 誰可以讓後端「直接」寫進他的行事曆（決策 27）。
+    # 🔴 這是**種子名單**，不再是執行期的白名單（決策 32）。
+    #
+    # 執行期問的是資料庫：google_credentials 有沒有這個人的有效憑證。
+    # 這份名單只在啟動時用一次——把下面那組 .env 憑證種進那張表
+    # （見 CalendarCredentialsBootstrap），讓「程式碼只讀表」從第一天就成立。
+    #
+    # 列在這裡的人，.env 說了算：每次啟動都會比對，不一樣就覆蓋。
+    # per-user 的授權流程上線後，把這份名單清空，種子邏輯就自動停止。
     #
     # 空的＝所有人走預填連結：不需要 OAuth、不受 Google 的 100 人終身上限與
     # 4-6 週審核限制，下面四個憑證也可以整個留白。
-    # 有人＝那些人的卡片會長出 postback 按鈕（一鍵整批 + 改了會連動），
-    # 而此時憑證沒填齊會**啟動失敗**——因為那個組合一定是壞的。
     #
     # 逗號分隔，例如 CALENDAR_OAUTH_USER_IDS=U4af4980629,U0123456789
     oauth-user-ids: ${CALENDAR_OAUTH_USER_IDS:}
@@ -117,7 +134,10 @@ svra:
     #    停在 Testing 的話 Google 會在七天後撤銷 refresh token（見決策 26）。
     client-id: ${GOOGLE_CLIENT_ID:}
     client-secret: ${GOOGLE_CLIENT_SECRET:}
-    # 由 deploy/google-calendar-auth.py 一次性取得，跑一次就好
+    # 由 deploy/google-calendar-auth.py 一次性取得，跑一次就好。
+    # 🔴 這是**使用者**的憑證，不是應用程式的——它現在的歸宿是 google_credentials 表，
+    # 這一欄只是種子（上面 oauth-user-ids 的說明）。混在這裡就是為什麼
+    # 「只能有一個人直接匯入」：環境變數天生只能有一份。
     refresh-token: ${GOOGLE_REFRESH_TOKEN:}
     # 專用子行事曆，同一支腳本會建立並印出它的 id。
     # 不用 primary：機器產生的事件跟手建的行程混在一起，抽錯時就沒有「整層關掉」這個選項。

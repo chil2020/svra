@@ -84,9 +84,9 @@ class CalendarSyncHandler implements OutboxEventHandler {
         List<Job> done = new ArrayList<>();
         for (Job job : jobs) {
             if (job.remove()) {
-                client.delete(job.eventId());
+                client.delete(sync.lineUserId(), job.eventId());
             } else {
-                client.upsert(job.eventId(), job.summary(), job.detail(),
+                client.upsert(sync.lineUserId(), job.eventId(), job.summary(), job.detail(),
                         job.occursAt(), job.timeSpecified());
             }
             done.add(job);

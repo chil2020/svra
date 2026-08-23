@@ -79,17 +79,19 @@ public class CalendarSync {
         if (data == null || !data.startsWith(ACTION_PREFIX)) {
             return false;
         }
-        // 🔴 這道守衛不是多餘的，即使卡片本來就只給白名單長 postback 按鈕。
+        // 🔴 這道守衛不是多餘的，即使卡片本來就只給授權過的人長 postback 按鈕。
         //
-        // 憑證只有一份：refresh token 與 calendarId 都指向<b>擁有者的</b>那本行事曆。
-        // 所以「處理了一個不該處理的 postback」不是沒事發生，是<b>把別人的行程
-        // 寫進擁有者的行事曆</b>。
-        //
-        // 而卡片是會過期的訊息：某個人今天在白名單裡、明天被拿掉，
-        // 他手機裡那則舊卡片上的按鈕還在，按下去照樣送 postback 進來。
+        // 卡片是**會過期的訊息**：某個人今天有授權、明天撤銷，他手機裡那則舊卡片上
+        // 的按鈕還在，按下去照樣送 postback 進來。
         // **按鈕長不長出來是排版，能不能執行是授權，兩件事不能共用同一個判斷。**
+        //
+        // 憑證搬進資料庫（決策 32）之後，這道守衛的意義變了但沒有變小：
+        // 以前擋的是「把別人的行程寫進擁有者那本行事曆」——因為所有人共用一組憑證；
+        // 現在每個人寫自己那本，擋的是「拿著一顆失效的按鈕去戳一個已經撤銷的授權」，
+        // 而那條路的下場是 CalendarAuthorizationException 被判永久失敗、
+        // 使用者收到一則看不懂的錯誤通知。**在這裡說清楚比較好。**
         if (!capability.canImportDirectly(lineUserId)) {
-            log.warn("不在白名單的使用者送來匯入請求，已拒絕");
+            log.warn("沒有有效行事曆授權的使用者送來匯入請求，已拒絕");
             notifyPlain(webhookEventId, lineUserId, replyToken,
                     "⚠️ 這顆按鈕已經失效了。說一聲「列出行程」，我給你一份新的清單。");
             return true;

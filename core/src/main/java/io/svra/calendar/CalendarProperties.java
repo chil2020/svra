@@ -1,7 +1,6 @@
 package io.svra.calendar;
 
 import java.util.List;
-import java.util.Set;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -25,15 +24,20 @@ import jakarta.validation.constraints.Positive;
  * <p>這仍然是決策 8 那個判斷（設定錯誤要在啟動時炸），只是把「錯誤」定義得更準：
  * <b>擋的是不可能成立的組合，不是沒用到的欄位。</b>
  *
- * @param oauthUserIds           可以讓後端直接寫入行事曆的 LINE userId。
- *                               <p>🔴 <b>憑證只有一份，所以這份名單實務上就是「擁有者」。</b>
- *                               下面的 refreshToken 與 calendarId 指向<b>某一個</b> Google
- *                               帳號的<b>某一本</b>行事曆——名單放兩個人，等於第二個人的行程
- *                               會寫進第一個人的行事曆。<b>那幾乎一定不是你要的。</b>
- *                               <p>它做成清單而不是單一值，是為了讓同一個人的兩個 LINE 帳號
- *                               能共用；真正要讓多個人各自匯進自己的行事曆，得先做
- *                               per-user 的 token 儲存，那時這一欄會整個消失
- *                               （見 {@code CalendarCapabilityAdapter}）
+ * @param oauthUserIds           <b>種子名單</b>：啟動時要把下面那組憑證種進
+ *                               {@code google_credentials} 的人（見
+ *                               {@code CalendarCredentialsBootstrap}）。
+ *                               <p>🔴 <b>它已經不是執行期的白名單了。</b>
+ *                               「這個人能不能直接匯入」現在問的是資料庫——
+ *                               {@code Credentials.hasActive}。這一欄只在啟動時用一次。
+ *                               <p>舊的註解寫著「憑證只有一份，所以名單放兩個人，
+ *                               第二個人的行程會寫進第一個人的行事曆」。那是真的，
+ *                               而<b>成因是儲存方式而不是產品決定</b>：refresh token 放在
+ *                               環境變數裡，而環境變數天生只能有一份。搬進資料庫之後
+ *                               那個限制自己消失——但<b>這一欄仍然共用同一組種子</b>，
+ *                               所以列兩個人在這裡，依然是兩個人共用一本行事曆。
+ *                               <p>要讓每個人各自匯進自己的行事曆，缺的已經不是 schema，
+ *                               是讓使用者在 LINE 裡跑完 OAuth 的那個端點
  * @param clientId               GCP OAuth client（Desktop app 類型）
  * @param clientSecret           同上。Desktop client 的 secret 本來就不算機密，
  *                               但它跟 refresh token 一起就能換 access token，所以照機密管
@@ -72,19 +76,14 @@ public record CalendarProperties(
                         .toList();
     }
 
-    /** 走 OAuth 的使用者。用 Set 是因為每張卡片都要查一次。 */
-    Set<String> oauthUsers() {
-        return Set.copyOf(oauthUserIds);
-    }
-
     /**
      * 訊息寫得像給人看的，因為它就是給人看的——啟動失敗時這句話會出現在
      * 一整頁 Spring 的綁定例外中間，寫「must not be blank」等於沒說。
      */
     @AssertTrue(message = "svra.calendar.oauth-user-ids 有人，"
             + "但 client-id / client-secret / refresh-token / calendar-id 沒填齊。"
-            + "白名單裡的人會按到一顆註定失敗的按鈕——"
-            + "請跑 deploy/google-calendar-auth.py，或把白名單清空讓所有人走連結。")
+            + "種子名單裡的人會按到一顆註定失敗的按鈕——"
+            + "請跑 deploy/google-calendar-auth.py，或把名單清空讓所有人走連結。")
     boolean isOauthConfiguredWhenWhitelisted() {
         return oauthUserIds.isEmpty()
                 || (notBlank(clientId) && notBlank(clientSecret)

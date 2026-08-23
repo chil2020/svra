@@ -14,7 +14,7 @@ import io.svra.LogContext;
 import io.svra.calendar.CalendarSync;
 import io.svra.command.NoteCommandService;
 import io.svra.note.NoteService;
-import io.svra.notify.Blocklist;
+import io.svra.user.Users;
 import io.svra.notify.Greetings;
 
 /**
@@ -36,15 +36,15 @@ public class LineWebhookController {
     private final NoteCommandService commandService;
     private final CalendarSync calendarSync;
     private final Greetings greetings;
-    private final Blocklist blocklist;
+    private final Users users;
 
     public LineWebhookController(NoteService noteService, NoteCommandService commandService,
-            CalendarSync calendarSync, Greetings greetings, Blocklist blocklist) {
+            CalendarSync calendarSync, Greetings greetings, Users users) {
         this.noteService = noteService;
         this.commandService = commandService;
         this.calendarSync = calendarSync;
         this.greetings = greetings;
-        this.blocklist = blocklist;
+        this.users = users;
     }
 
     /**
@@ -81,6 +81,16 @@ public class LineWebhookController {
     }
 
     private void dispatch(LineWebhookPayload.Event event) {
+        // 🔴 這一行是所有外鍵的前提。notes、message_anchors、outbox_events……
+        // 全部指向 users，所以「使用者列存在」必須發生在任何一筆使用者資料之前。
+        //
+        // 放在這裡而不是 follow 事件裡，因為 follow **靠不住**：在 users 表出現之前
+        // 就加過好友的人不會再送一次，而漏接一則 follow 的症狀是那個人接下來
+        // 每一次操作都撞外鍵——看起來像「傳語音沒反應」。
+        //
+        // 不看事件型別、一律 upsert。成本是一次命中主鍵索引的 ON CONFLICT DO NOTHING。
+        users.ensureExists(userIdOf(event));
+
         if (event.isAudioMessage()) {
             boolean created = noteService.recordIncoming(event.source().userId(), event.message().id());
             if (created) {
@@ -115,11 +125,11 @@ public class LineWebhookController {
             // 🔴 在這之前，加了好友的人收到的是一片空白。單人使用時那不是缺口
             // （你自己知道怎麼用），開放給別人的那一刻它就是第一印象。
             log.info("新使用者加入好友");
-            blocklist.unblock(event.source().userId());
+            users.unblock(event.source().userId());
             greetings.welcome(event.source().userId(), event.webhookEventId(), event.replyToken());
         } else if (event.isUnfollow()) {
             log.info("使用者封鎖或刪除本帳號");
-            blocklist.block(event.source().userId());
+            users.block(event.source().userId());
         } else if (event.isUnsend()) {
             // LINE 的開發指南明確要求處理：他按下收回的時候，語音早就轉錄完、
             // 逐字稿與抽出來的行程都已經在資料庫裡了。
@@ -134,6 +144,11 @@ public class LineWebhookController {
      * 關聯 id：訊息事件用 LINE 的 message id，postback 沒有那個東西，
      * 退而用 {@code webhookEventId}——它也是那條路的冪等鍵，log 與資料對得起來。
      */
+    /** {@code source} 在某些事件型別（例如帳號層級的通知）上可能整個缺席。 */
+    private static String userIdOf(LineWebhookPayload.Event event) {
+        return event.source() == null ? null : event.source().userId();
+    }
+
     private static String eventMessageId(LineWebhookPayload.Event event) {
         return event.message() != null ? event.message().id() : event.webhookEventId();
     }

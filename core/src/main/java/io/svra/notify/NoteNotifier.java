@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import io.svra.line.LinePushClient;
+import io.svra.user.Users;
 import io.svra.note.Note;
 import io.svra.note.NoteExtraction;
 import io.svra.note.NoteExtractionRepository;
@@ -62,7 +63,7 @@ public class NoteNotifier {
     private final LinePushClient pushClient;
     private final MessageAnchors anchors;
     private final CardRenderer renderer;
-    private final Blocklist blocklist;
+    private final Users users;
 
     public NoteNotifier(NoteRepository noteRepository,
             NoteExtractionRepository extractionRepository,
@@ -70,14 +71,14 @@ public class NoteNotifier {
             LinePushClient pushClient,
             MessageAnchors anchors,
             CardRenderer renderer,
-            Blocklist blocklist) {
+            Users users) {
         this.noteRepository = noteRepository;
         this.extractionRepository = extractionRepository;
         this.itemRepository = itemRepository;
         this.pushClient = pushClient;
         this.anchors = anchors;
         this.renderer = renderer;
-        this.blocklist = blocklist;
+        this.users = users;
     }
 
     /**
@@ -94,7 +95,7 @@ public class NoteNotifier {
             return null;
         }
         // 使用者可能在轉錄跑到一半時就封鎖了——那段路要數十秒，時間夠長。
-        if (blocklist.isBlocked(note.getLineUserId())) {
+        if (users.isBlocked(note.getLineUserId())) {
             log.info("收件者已封鎖本帳號，略過推播：messageId={}", sourceMessageId);
             return null;
         }

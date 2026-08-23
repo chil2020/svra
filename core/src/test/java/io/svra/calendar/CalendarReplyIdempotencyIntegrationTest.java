@@ -65,6 +65,14 @@ class CalendarReplyIdempotencyIntegrationTest {
 
     private static final String USER_ID = "U4af4980629";
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired
     private CalendarSyncHandler handler;
 
@@ -93,6 +101,7 @@ class CalendarReplyIdempotencyIntegrationTest {
     @BeforeEach
     void clearOutbox() {
         outboxRepository.deleteAll();
+        users.ensureExists(USER_ID);
     }
 
     @Test
@@ -112,6 +121,9 @@ class CalendarReplyIdempotencyIntegrationTest {
 
         // 對 Google 重送是安全的：決定性 event id 讓第二次撞 409 轉成更新。
         verify(client, atLeastOnce()).upsert(
+                // 第一個參數現在是 lineUserId——寫進**誰的**行事曆，
+                // 而那正是它從設定檔搬進資料庫的理由
+                org.mockito.ArgumentMatchers.eq(USER_ID),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(),

@@ -68,6 +68,14 @@ class CommandIdempotencyIntegrationTest {
     @MockitoBean
     private NoteCommandParser parser;
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired private NoteCommandService commandService;
     @Autowired private NoteRepository noteRepository;
     @Autowired private NoteExtractionRepository extractionRepository;
@@ -135,6 +143,7 @@ class CommandIdempotencyIntegrationTest {
     private Fixture seedThreeItems() {
         String sourceMessageId = "audio-" + UUID.randomUUID();
         String userId = "U" + UUID.randomUUID().toString().replace("-", "");
+        users.ensureExists(userId);
         Long extractionId = inTransaction(() -> {
             noteRepository.insertPendingIfAbsent(userId, sourceMessageId);
             Long noteId = noteRepository.findBySourceMessageId(sourceMessageId)

@@ -36,7 +36,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = {
         "svra.outbox.poll-interval-ms=3600000",
         "spring.rabbitmq.listener.simple.auto-startup=false",
-        // 這個測試裡的使用者是白名單成員——不然 postback 會被守衛擋下。
+        // 🔴 這三行合起來讓 CalendarCredentialsBootstrap 在 ApplicationReadyEvent
+        // 把這組憑證種進 google_credentials——**而那正是這個測試現在要走的路**。
+        // 「這個人能不能直接匯入」問的已經是資料庫，不是這份名單（決策 32），
+        // 所以少了加密金鑰的話 bootstrap 會跳過，postback 會被守衛擋下。
+        //
+        // 金鑰是明擺著的假值（解出來是一句話），不是隨機產生的——
+        // 隨機值會讓密文每次都不同，而且看起來像真的祕密。
+        "svra.secrets.encryption-key=c3ZyYS10ZXN0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=",
         "svra.calendar.oauth-user-ids=U4af4980629",
         "svra.calendar.client-id=test-client",
         "svra.calendar.client-secret=test-secret",
@@ -48,6 +55,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CalendarImportIdempotencyIntegrationTest {
 
     private static final String USER_ID = "U4af4980629";
+
+    /** 沒有任何行事曆授權的人。 */
+    private static final String NOT_AUTHORIZED = "U-someone-else";
+
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
 
     @Autowired
     private CalendarSync calendarSync;
@@ -61,6 +79,9 @@ class CalendarImportIdempotencyIntegrationTest {
     @BeforeEach
     void clearOutbox() {
         outboxRepository.deleteAll();
+        users.ensureExists(USER_ID);
+        // 被拒的那條路也會寫 outbox（「按鈕已經失效了」），一樣受外鍵管。
+        users.ensureExists(NOT_AUTHORIZED);
     }
 
     @Test
@@ -117,15 +138,16 @@ class CalendarImportIdempotencyIntegrationTest {
     }
 
     @Test
-    @DisplayName("🔴 不在白名單的人送來 postback → 拒絕，而且要告訴他按鈕失效了")
-    void postbackFromSomeoneNotWhitelistedIsRefused() {
+    @DisplayName("🔴 沒有授權的人送來 postback → 拒絕，而且要告訴他按鈕失效了")
+    void postbackFromSomeoneWithoutAuthorizationIsRefused() {
         String cardId = seedCard(List.of(11L));
         String webhookEventId = "wh-" + UUID.randomUUID();
 
-        // 卡片本來就只給白名單長 postback 按鈕，但**卡片是會過期的訊息**：
-        // 某人今天在名單裡、明天被拿掉，他手機裡那則舊卡片上的按鈕還在。
-        // 憑證只有一份，處理下去就是把別人的行程寫進擁有者的行事曆。
-        calendarSync.handlePostback("U-someone-else", webhookEventId,
+        // 卡片本來就只給授權過的人長 postback 按鈕，但**卡片是會過期的訊息**：
+        // 某人今天有授權、明天撤銷，他手機裡那則舊卡片上的按鈕還在。
+        // 處理下去的下場是拿一個已經失效的授權去打 Google，然後使用者收到
+        // 一則看不懂的錯誤通知——在守衛這裡說清楚比較好。
+        calendarSync.handlePostback(NOT_AUTHORIZED, webhookEventId,
                 "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         assertThat(syncEvents(webhookEventId)).isEmpty();
@@ -141,8 +163,8 @@ class CalendarImportIdempotencyIntegrationTest {
         String cardId = seedCard(List.of(11L));
         String webhookEventId = "wh-" + UUID.randomUUID();
 
-        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
-        calendarSync.handlePostback("U-someone-else", webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
+        calendarSync.handlePostback(NOT_AUTHORIZED, webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
+        calendarSync.handlePostback(NOT_AUTHORIZED, webhookEventId, "a=cal&c=" + cardId + "&i=*", "reply-token");
 
         // 擋不住的是「使用者自己連點五次」——那是五個不同的 webhookEventId，
         // 五則回覆。而那是對的：他按了五次，五次都給回饋才誠實。

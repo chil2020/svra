@@ -13,6 +13,7 @@ import org.mockito.quality.Strictness;
 
 import tools.jackson.databind.json.JsonMapper;
 
+import io.svra.user.Users;
 import io.svra.line.LinePushClient;
 import io.svra.line.ReplyTokenExpiredException;
 
@@ -41,7 +42,7 @@ class PushTextRequestedHandlerTest {
 
     @Mock LinePushClient pushClient;
     @Mock MessageAnchors anchors;
-    @Mock Blocklist blocklist;
+    @Mock Users users;
     @Mock Deliveries deliveries;
 
     private final JsonMapper objectMapper = JsonMapper.builder().build();
@@ -49,7 +50,7 @@ class PushTextRequestedHandlerTest {
 
     @BeforeEach
     void setUp() {
-        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors, blocklist,
+        handler = new PushTextRequestedHandler(pushClient, objectMapper, anchors, users,
                 deliveries);
     }
 
@@ -90,7 +91,7 @@ class PushTextRequestedHandlerTest {
     @Test
     @DisplayName("🔴 收件者已封鎖 → 一則都不送，也不要卡在重試")
     void nothingIsSentToSomeoneWhoBlockedUs() {
-        when(blocklist.isBlocked(USER_ID)).thenReturn(true);
+        when(users.isBlocked(USER_ID)).thenReturn(true);
 
         handle(PushTextPayload.card(USER_ID, "抬頭", List.of(1L), "card-1", FLEX)
                 .repliedWith("rt-abc"));

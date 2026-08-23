@@ -3,6 +3,7 @@ package io.svra.notify;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -42,8 +43,21 @@ class MessageAnchorIntegrationTest {
 
     private static final String USER_ID = "U4af4980629";
 
+    /**
+     * 外鍵擋著：使用者列一定要先在（V15）。正式環境由 webhook 入口保證
+     * （{@code LineWebhookController.dispatch} 第一行），而測試繞過了那個入口，
+     * 所以要自己建——這不是測試的雜訊，是<b>真實的寫入順序</b>。
+     */
+    @Autowired
+    private io.svra.user.Users users;
+
     @Autowired
     private MessageAnchors anchors;
+
+    @BeforeEach
+    void ensureUserExists() {
+        users.ensureExists(USER_ID);
+    }
 
     @Test
     @DisplayName("存進去什麼順序，取出來就是什麼順序——不是排序過的")

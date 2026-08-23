@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.ObjectMapper;
 
+import io.svra.user.Users;
 import io.svra.line.LinePushClient;
 import io.svra.line.ReplyTokenExpiredException;
 import io.svra.note.NoteService;
@@ -25,15 +26,15 @@ class PushTextRequestedHandler implements OutboxEventHandler {
     private final LinePushClient pushClient;
     private final ObjectMapper objectMapper;
     private final MessageAnchors anchors;
-    private final Blocklist blocklist;
+    private final Users users;
     private final Deliveries deliveries;
 
     PushTextRequestedHandler(LinePushClient pushClient, ObjectMapper objectMapper,
-            MessageAnchors anchors, Blocklist blocklist, Deliveries deliveries) {
+            MessageAnchors anchors, Users users, Deliveries deliveries) {
         this.pushClient = pushClient;
         this.objectMapper = objectMapper;
         this.anchors = anchors;
-        this.blocklist = blocklist;
+        this.users = users;
         this.deliveries = deliveries;
     }
 
@@ -52,7 +53,7 @@ class PushTextRequestedHandler implements OutboxEventHandler {
         PushTextPayload push = objectMapper.readValue(payload, PushTextPayload.class);
         // 封鎖的人收不到，送了也是白送。直接當成功——重試不會讓他變成沒封鎖，
         // 而讓事件卡在 PENDING 只會在 log 裡堆一堆註定沒有意義的失敗。
-        if (blocklist.isBlocked(push.lineUserId())) {
+        if (users.isBlocked(push.lineUserId())) {
             log.info("收件者已封鎖本帳號，略過這則訊息");
             return;
         }
