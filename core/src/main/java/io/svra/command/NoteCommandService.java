@@ -29,6 +29,7 @@ import io.svra.note.NoteItem;
 import io.svra.note.NoteItemRepository;
 import io.svra.note.NoteRepository;
 import io.svra.note.NoteService;
+import io.svra.notify.Greetings;
 import io.svra.notify.MessageAnchors;
 import io.svra.notify.NoteNotifier;
 import io.svra.notify.PushTextPayload;
@@ -146,12 +147,52 @@ public class NoteCommandService {
         }
 
         // ── 第二段：沒有交易。限流與解析都不是資料庫的事 ──
-        // 超過額度就往外拋，讓 outbox 的指數退避去處理。
-        rateLimiter.consume(payload.lineUserId());
-        NoteCommand command = parser.parse(payload.text(), prepared.items());
+        //
+        // 🔴 快速路徑排在限流<b>之前</b>，而那個順序就是這段程式碼的重點。
+        //
+        // rateLimiter 保護的是「只有一份」的 Ollama。讓一個**完全不打 LLM** 的指令
+        // 先跟它請額度，是把保護措施套在不需要保護的東西上——而後果不是浪費，
+        // 是**使用者傳了幾則語音撞到上限之後，連按鈕都按不動了**，
+        // 為了一個根本用不到 Ollama 的操作。
+        QuickCommand quick = QuickCommand.resolve(payload.text());
+
+        if (quick == QuickCommand.HELP) {
+            tx.executeWithoutResult(status -> replyWithHelp(payload));
+            return;
+        }
+
+        NoteCommand command;
+        if (quick == QuickCommand.LIST) {
+            command = NoteCommand.listOnly();
+        } else {
+            // 超過額度就往外拋，讓 outbox 的指數退避去處理。
+            rateLimiter.consume(payload.lineUserId());
+            command = parser.parse(payload.text(), prepared.items());
+        }
 
         // ── 第三段：短交易，執行紀錄與所有變更同進同退 ──
         tx.executeWithoutResult(status -> apply(payload, prepared, command));
+    }
+
+    /**
+     * 「使用說明」：不動任何資料，只回一段文字。
+     *
+     * <p>冪等守衛照樣要有，理由跟 {@link #apply} 一模一樣——outbox 是 at-least-once，
+     * 少了它，重投一次使用者就收到兩份說明。<b>不改資料不等於可以重複做。</b>
+     */
+    private void replyWithHelp(CommandPayload payload) {
+        if (executionRepository.insertIfAbsent(
+                payload.commandMessageId(), payload.lineUserId()) == 0) {
+            log.info("說明已經回過了，跳過重跑（outbox 是 at-least-once）");
+            return;
+        }
+        outboxRepository.save(OutboxEvent.pending(
+                payload.commandMessageId(),
+                NoteService.EVENT_PUSH_TEXT_REQUESTED,
+                payload.lineUserId(),
+                serialize(PushTextPayload.plain(payload.lineUserId(), Greetings.helpText())
+                        .repliedWith(payload.replyToken()))));
+        log.info("已回覆使用說明");
     }
 
     /**

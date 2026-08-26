@@ -60,6 +60,17 @@ record NoteCommand(List<Op> ops,
      *                      時刻既然是沿用的，「時刻是不是講出來的」自然也該沿用
      * @param category      ADD 用：SCHEDULE / TODO / IDEA
      */
+    /**
+     * 「就是要看清單」，不經過模型。
+     *
+     * <p>給快速路徑用（見 {@link QuickCommand}）：按鈕送出的字串是固定的，
+     * 意圖已經確定，沒有什麼要模型判斷的。
+     */
+    static NoteCommand listOnly() {
+        return new NoteCommand(
+                List.of(new Op(Action.LIST, null, null, null, null, null)), null, null);
+    }
+
     record Op(Action action,
             @JsonProperty(required = false) Integer itemIndex,
             @JsonProperty(required = false) String title,
