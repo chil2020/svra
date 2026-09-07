@@ -27,6 +27,20 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/svra}
     username: ${POSTGRES_USER:svra}
     password: ${POSTGRES_PASSWORD:svra-dev-only}
+  flyway:
+    # 🔴 啟動時第一個碰資料庫的是 Flyway（不是 JPA，也不是 Hikari 的 pool）。
+    # 它預設連不到就直接拋 SQLException，整個 context 起不來、容器退出、
+    # restart policy 再撿起來——重開機時 postgres 還在暖機，這就是那個重啟迴圈。
+    #
+    # ⚠️ connect-retries-interval 不是「每次等這麼久」，是**退避的上限**。
+    # Flyway 內部是 BackoffStrategy(1, 2, interval)：間隔 1、2、4、8… 秒翻倍，
+    # 碰到 interval 才封頂。所以總等待不是「次數 × 間隔」，改一個要連另一個
+    # 一起算——同樣 25 次，interval 5s 是等 2 分鐘，改成 30s 會變成等 11 分鐘。
+    #
+    # 這組是 1+2+4 + 5×22 ≈ 117 秒，賭的是「兩分鐘內 postgres 一定起得來」。
+    # 真的兩分鐘還連不上就不是開機順序的問題了，該讓它失敗、把話留在 log 裡。
+    connect-retries: 25
+    connect-retries-interval: 5s
   jpa:
     hibernate:
       ddl-auto: validate # schema 一律走 Flyway，JPA 只驗證

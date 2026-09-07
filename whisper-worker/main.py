@@ -31,6 +31,16 @@ logging.basicConfig(
 )
 log = logging.getLogger("whisper-worker")
 
+# 連不上 rabbitmq 時，pika 自己會用 ERROR 印四行加一整段 traceback，每重試一次印一遍。
+# 等 rabbitmq 起來的那半分鐘就能刷掉幾十屏，而裡面沒有下面重連迴圈沒講到的資訊
+# （那行 log 已經帶上 host:port 與例外本文）。連線狀態統一由重連迴圈報告。
+for _noisy in (
+    "pika.adapters.utils.connection_workflow",
+    "pika.adapters.utils.selector_ioloop_adapter",
+    "pika.adapters.blocking_connection",
+):
+    logging.getLogger(_noisy).setLevel(logging.CRITICAL)
+
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://svra:svra-dev-only@localhost:5672/")
 EXCHANGE = os.getenv("SVRA_EXCHANGE", "svra.direct")
 DLX = os.getenv("SVRA_DLX", "svra.dlx")
@@ -40,6 +50,13 @@ RESULT_QUEUE = os.getenv("RESULT_QUEUE", "transcribe.results")
 RESULT_ROUTING_KEY = os.getenv("RESULT_ROUTING_KEY", "transcribe.result")
 
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/data/audio")
+
+RECONNECT_DELAY_SEC = 5
+# 重開機時前幾次連不上是正常的（rabbitmq 還沒起來），那是 warning。
+# 但「還在等」跟「永遠等不到」是兩回事：worker 沒有 healthcheck，連不上時
+# 容器狀態仍然是 Up——一個打錯的 host 名字會變成一個看起來很健康的無限迴圈。
+# 超過一分鐘就升級成 error，讓它在 log 裡自己浮出來。
+RECONNECT_ERROR_AFTER = 60 // RECONNECT_DELAY_SEC
 
 # 轉錄成功後刪掉音檔。逐字稿已經寫進資料庫，音檔留著只有壞處：
 # 目錄無上限成長，而且那是語音隱私資料——「不離開自己的機器」講的是不外傳，
@@ -165,22 +182,29 @@ def handle_job(ch, method, properties, body):
 
 
 def main():
+    # URL 在迴圈外解析：它不會在兩次重試之間改變，而解析失敗是設定寫錯，
+    # 該在啟動時就炸掉，不是混進重連迴圈裡假裝成「連不上」。
+    # 順帶讓 except 分支永遠拿得到 params.host/port 可以印。
+    params = pika.URLParameters(RABBITMQ_URL)
+
+    # 🔴 heartbeat=0（關閉心跳），改靠 TCP keepalive 偵測斷線。
+    #
+    # BlockingConnection 只有在「回到事件迴圈」時才回應心跳，而
+    # handle_job() 會在 model.transcribe() 裡整段阻塞——Breeze-ASR-25
+    # 實測短音檔 33 秒還安全，但一則幾分鐘的語音留言就會超過預設協商的
+    # 60 秒 ×2。RabbitMQ 一斷線，做完之後的 basic_ack 就失敗，
+    # 任務回到佇列被重新轉錄——**越慢的任務越會被重跑，而重跑只會更慢**。
+    #
+    # 另一個做法是把轉錄丟到 thread、主迴圈週期性 process_data_events()。
+    # 那樣保得住心跳的偵測能力，但要處理跨執行緒 ack（add_callback_threadsafe）。
+    # 這裡的 worker 一次只做一件事、掛掉由 restart policy 接手，
+    # 用不到那個複雜度。
+    params.heartbeat = 0
+
+    attempt = 0
+    failing_since = None
     while True:
         try:
-            # 🔴 heartbeat=0（關閉心跳），改靠 TCP keepalive 偵測斷線。
-            #
-            # BlockingConnection 只有在「回到事件迴圈」時才回應心跳，而
-            # handle_job() 會在 model.transcribe() 裡整段阻塞——Breeze-ASR-25
-            # 實測短音檔 33 秒還安全，但一則幾分鐘的語音留言就會超過預設協商的
-            # 60 秒 ×2。RabbitMQ 一斷線，做完之後的 basic_ack 就失敗，
-            # 任務回到佇列被重新轉錄——**越慢的任務越會被重跑，而重跑只會更慢**。
-            #
-            # 另一個做法是把轉錄丟到 thread、主迴圈週期性 process_data_events()。
-            # 那樣保得住心跳的偵測能力，但要處理跨執行緒 ack（add_callback_threadsafe）。
-            # 這裡的 worker 一次只做一件事、掛掉由 restart policy 接手，
-            # 用不到那個複雜度。
-            params = pika.URLParameters(RABBITMQ_URL)
-            params.heartbeat = 0
             conn = pika.BlockingConnection(params)
             ch = conn.channel()
             setup_topology(ch)
@@ -188,10 +212,25 @@ def main():
             ch.basic_qos(prefetch_count=1)
             ch.basic_consume(queue=JOB_QUEUE, on_message_callback=handle_job)
             log.info("worker ready, consuming %s", JOB_QUEUE)
+            attempt, failing_since = 0, None   # 連上了就歸零，下次斷線重新從 warning 數起
             ch.start_consuming()
-        except pika.exceptions.AMQPConnectionError:
-            log.warning("rabbitmq unavailable, retrying in 5s ...")
-            time.sleep(5)
+        # OSError 不是多餘的：rabbitmq 容器還沒起來時，DNS 查不到那個名字，
+        # pika 的 _reap_last_connection_workflow_error() 會把底層的
+        # socket.gaierror 原封不動再拋出來，不包成 AMQPConnectionError——
+        # 只接後者的話，這個迴圈接不住，行程直接死給 restart policy 收。
+        # 重開機時 rabbitmq 一定比 worker 晚一步，走的就是這條路徑。
+        except (pika.exceptions.AMQPConnectionError, OSError) as exc:
+            attempt += 1
+            if failing_since is None:
+                failing_since = time.monotonic()
+            # 印 host:port 而不是 RABBITMQ_URL——URL 裡有密碼。
+            log.log(
+                logging.WARNING if attempt <= RECONNECT_ERROR_AFTER else logging.ERROR,
+                "rabbitmq 連不上（%s:%d，第 %d 次，已等 %ds）：%s — %ds 後重試",
+                params.host, params.port, attempt,
+                int(time.monotonic() - failing_since), exc, RECONNECT_DELAY_SEC,
+            )
+            time.sleep(RECONNECT_DELAY_SEC)
         except KeyboardInterrupt:
             log.info("shutting down")
             return

@@ -17,6 +17,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # 🔴 基礎服務的 restart policy 比 depends_on 更關鍵。
+    # depends_on 只在「執行 docker compose up」那一刻生效；重開機時是 daemon
+    # 依各容器自己的 policy 把它們叫醒，daemon 不讀 compose 檔，不看 depends_on。
+    # 這三個原本沒有 policy，重開機後停在 exited，而有 unless-stopped 的
+    # core／worker 自己回來了卻連不到它們——UnknownHostException: postgres。
+    #
+    # 所以順序不是「調」出來的，是兩件事湊出來的：依賴一定會回來（這行），
+    # 依賴者要等得起（core 的 flyway connect-retries、worker 的重連迴圈）。
+    restart: unless-stopped
 
   rabbitmq:
     image: rabbitmq:4-management
@@ -33,6 +42,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    restart: unless-stopped   # 同上：重開機後要自己回來，否則 worker 空轉
 
   redis:
     image: redis:7-alpine
@@ -43,6 +53,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped   # 同上
 
   whisper-worker:
     build: ./whisper-worker
@@ -88,6 +99,9 @@ services:
       - ./data/audio:/data/audio          # 與 whisper-worker 交換音檔
     extra_hosts:
       - "host.docker.internal:host-gateway"   # Linux 上沒有這行會找不到宿主機
+    # 這段只管 `docker compose up`：那時 core 會等三個依賴都 healthy 才起。
+    # 重開機那條路徑不吃這裡（見 postgres 的註解），core 得靠自己等——
+    # 交給 application.yml 的 spring.flyway.connect-retries。
     depends_on:
       postgres:
         condition: service_healthy
