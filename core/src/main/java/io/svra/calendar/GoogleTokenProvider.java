@@ -17,6 +17,7 @@ import org.springframework.web.client.RestClient;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import io.svra.user.Credentials;
 import io.svra.user.GoogleAuthorization;
 
 /**
@@ -54,6 +55,7 @@ class GoogleTokenProvider {
     private final RestClient restClient;
     private final CalendarProperties properties;
     private final Clock clock;
+    private final Credentials credentials;
 
     /**
      * 每個使用者手上那顆 token。
@@ -65,10 +67,12 @@ class GoogleTokenProvider {
      */
     private final Map<String, CachedToken> cache = new HashMap<>();
 
-    GoogleTokenProvider(RestClient.Builder builder, CalendarProperties properties, Clock clock) {
+    GoogleTokenProvider(RestClient.Builder builder, CalendarProperties properties, Clock clock,
+            Credentials credentials) {
         this.restClient = builder.build();
         this.properties = properties;
         this.clock = clock;
+        this.credentials = credentials;
     }
 
     /**
@@ -90,26 +94,47 @@ class GoogleTokenProvider {
         form.add("refresh_token", authorization.refreshToken());
         form.add("grant_type", "refresh_token");
 
-        TokenResponse token = restClient.post()
-                .uri(TOKEN_URL)
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .body(form)
-                .exchange((request, response) -> {
-                    if (response.getStatusCode().is2xxSuccessful()) {
-                        return response.bodyTo(TokenResponse.class);
-                    }
-                    // 🔴 400/401 帶 invalid_grant 才是「授權真的沒了」。
-                    // 其他狀態（5xx、429、逾時）是 Google 那邊的事，往外拋當暫時性失敗，
-                    // 讓 outbox 退避重試——分類錯的代價不對稱，見 OutboxPermanentFailureException。
-                    Map<?, ?> error = response.bodyTo(Map.class);
-                    String reason = error == null ? null : String.valueOf(error.get("error"));
-                    if ("invalid_grant".equals(reason) || "invalid_client".equals(reason)) {
-                        throw new CalendarAuthorizationException(
-                                "Google 授權失效（" + reason + "），要重新授權才會好");
-                    }
-                    throw new IllegalStateException(
-                            "換 access token 失敗：" + response.getStatusCode() + " " + reason);
-                });
+        TokenResponse token;
+        try {
+            token = restClient.post()
+                    .uri(TOKEN_URL)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(form)
+                    .exchange((request, response) -> {
+                        if (response.getStatusCode().is2xxSuccessful()) {
+                            return response.bodyTo(TokenResponse.class);
+                        }
+                        // 🔴 400/401 帶 invalid_grant 才是「授權真的沒了」。
+                        // 其他狀態（5xx、429、逾時）是 Google 那邊的事，往外拋當暫時性失敗，
+                        // 讓 outbox 退避重試——分類錯的代價不對稱，見 OutboxPermanentFailureException。
+                        Map<?, ?> error = response.bodyTo(Map.class);
+                        String reason = error == null ? null : String.valueOf(error.get("error"));
+                        if ("invalid_grant".equals(reason) || "invalid_client".equals(reason)) {
+                            // reason 帶著走：兩者對使用者的意義完全不同，
+                            // 而收尾要不要標記撤銷就看它（見 CalendarAuthorizationException）。
+                            throw new CalendarAuthorizationException(reason,
+                                    "Google 授權失效（" + reason + "），要重新授權才會好");
+                        }
+                        throw new IllegalStateException(
+                                "換 access token 失敗：" + response.getStatusCode() + " " + reason);
+                    });
+        } catch (CalendarAuthorizationException e) {
+            // 🔴 撤銷這件事在這裡落地，不留給呼叫端。
+            //
+            // 呼叫端拿到的是一個「永久性失敗」，它接下來只會把事件判死、寫一則通知，
+            // 然後把例外往外拋——沒有人會回頭去更新那一列。少了這幾行，資料庫會
+            // 一直說這個人的憑證是活的（revoked_at 是 NULL），而啟動檢查同時在喊
+            // 「他的授權壞了」。兩邊對不上的時候，看資料的人會相信資料庫。
+            //
+            // 交易：outbox 的處理器是在外層交易被掛起的狀態下跑的
+            // （OutboxPoller 的 PROPAGATION_NOT_SUPPORTED），所以這裡的寫入
+            // 不會被呼叫端的回滾帶走。revoke() 自己再用 REQUIRES_NEW 上一道保險，
+            // 免得哪天有人從一個有交易的地方呼叫進來。
+            if (e.userGrantIsDead()) {
+                credentials.revoke(lineUserId);
+            }
+            throw e;
+        }
 
         if (token == null || token.accessToken() == null) {
             throw new IllegalStateException("Google 回了 200 但沒有 access_token");

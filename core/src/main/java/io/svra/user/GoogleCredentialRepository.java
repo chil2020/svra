@@ -16,6 +16,15 @@ interface GoogleCredentialRepository extends JpaRepository<GoogleCredential, Str
     java.util.List<GoogleCredential> findAllByRevokedAtIsNull();
 
     /**
+     * 授權過、但已經被標記撤銷的人。
+     *
+     * <p>「從沒授權」查不到，「授權過又失效」查得到——只有後者需要一則
+     * 「請重新授權」。啟動檢查靠它讓失效狀態每次啟動都講一次
+     * （見 {@code CalendarStartupCheck}）。
+     */
+    java.util.List<GoogleCredential> findAllByRevokedAtIsNotNull();
+
+    /**
      * 寫入或更新憑證。
      *
      * <p>用 upsert 而不是「查了再存」：重新授權是常態（token 被撤銷、換行事曆、

@@ -48,11 +48,25 @@ class CalendarStartupCheck {
     @EventListener(ApplicationReadyEvent.class)
     void verify() {
         var userIds = credentials.activeUserIds();
-        if (userIds.isEmpty()) {
+        var revokedIds = credentials.revokedUserIds();
+        if (userIds.isEmpty() && revokedIds.isEmpty()) {
             // 沒有人授權＝所有人走連結（決策 27），根本不會用到 OAuth。
             // 還是去換 token 的話，每次啟動都會印一行紅色的「授權是壞的」——
             // 而那個部署一切正常。**會一直誤報的檢查，等於沒有檢查。**
             return;
+        }
+
+        // 🔴 已經標記撤銷的人要繼續講，而且每次啟動都講。
+        //
+        // 撤銷會把人從 activeUserIds() 移走，所以少了這個迴圈，症狀是：
+        // 失效當下那次啟動大聲喊一次，下一次重啟之後**完全安靜**——
+        // 而問題還在，那個人的匯入按鈕還是不會動。
+        // 「壞掉」跟「已知壞掉」不是同一件事，只有修好了才該安靜。
+        for (String lineUserId : revokedIds) {
+            log.error("使用者 {} 的行事曆授權已失效並標記撤銷，他的匯入會退回預填連結——"
+                    + "請重跑 deploy/google-calendar-auth.py 取得新的 refresh token"
+                    + "（若 OAuth consent screen 還停在 Testing，新的 token 七天後會再失效一次）",
+                    mask(lineUserId));
         }
 
         int broken = 0;
@@ -67,7 +81,8 @@ class CalendarStartupCheck {
                         mask(lineUserId), e);
             }
         }
-        log.info("行事曆授權檢查完畢：授權人數={} 壞掉={}", userIds.size(), broken);
+        log.info("行事曆授權檢查完畢：授權人數={} 壞掉={} 已撤銷={}",
+                userIds.size(), broken, revokedIds.size());
     }
 
     /**

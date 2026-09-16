@@ -177,6 +177,64 @@ class UserDataIntegrationTest {
     }
 
     @Test
+    @DisplayName("🔴 撤銷之後要查得到——查不到的話，失效狀態下次重啟就變隱形")
+    void revokedUsersStayVisibleSoTheProblemKeepsBeingReported() {
+        String userId = "U-revoked-visible-" + UUID.randomUUID();
+        users.ensureExists(userId);
+        credentials.store(userId, "token", "cal@example.com", "scope");
+        credentials.revoke(userId);
+
+        // 撤銷會把人從 activeUserIds() 移走，所以啟動檢查的迴圈再也掃不到他。
+        // 少了 revokedUserIds()，症狀是：失效當下喊一次，之後完全安靜，
+        // 而那個人的匯入按鈕還是不會動。修好了才該安靜，不是知道了就該安靜。
+        assertThat(credentials.activeUserIds()).doesNotContain(userId);
+        assertThat(credentials.revokedUserIds()).contains(userId);
+    }
+
+    @Test
+    @DisplayName("🔴 比對存著的憑證要看得到已撤銷的列，否則壞 token 每次啟動都被種回去")
+    void storedMatchesSeesRevokedRowsSoADeadTokenIsNotReseeded() {
+        String userId = "U-stored-matches-" + UUID.randomUUID();
+        users.ensureExists(userId);
+        credentials.store(userId, "dead-token", "cal@example.com", "scope");
+        credentials.revoke(userId);
+
+        // find() 看不到撤銷的列——CalendarCredentialsBootstrap 就是被這點騙到的：
+        // 它會判定成「這個人還沒有憑證」，把同一顆壞 token 種回去、
+        // 順手把 revoked_at 清掉，於是撤銷撐不過一次重啟。
+        assertThat(credentials.find(userId)).isEmpty();
+        assertThat(credentials.storedMatches(userId, "dead-token", "cal@example.com", "scope"))
+                .isTrue();
+        assertThat(credentials.hasCredentialRow(userId)).isTrue();
+    }
+
+    @Test
+    @DisplayName("換了一顆 token 就該判定成不一樣——重新授權要生效")
+    void storedMatchesRejectsADifferentToken() {
+        String userId = "U-stored-differs-" + UUID.randomUUID();
+        users.ensureExists(userId);
+        credentials.store(userId, "old-token", "cal@example.com", "scope");
+        credentials.revoke(userId);
+
+        assertThat(credentials.storedMatches(userId, "new-token", "cal@example.com", "scope"))
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("重新授權之後就不該再被當成失效的人報出來")
+    void reAuthorizingRemovesTheUserFromTheRevokedList() {
+        String userId = "U-revoked-cleared-" + UUID.randomUUID();
+        users.ensureExists(userId);
+        credentials.store(userId, "old", "cal@example.com", "scope");
+        credentials.revoke(userId);
+
+        credentials.store(userId, "new", "cal@example.com", "scope");
+
+        assertThat(credentials.revokedUserIds()).doesNotContain(userId);
+        assertThat(credentials.activeUserIds()).contains(userId);
+    }
+
+    @Test
     @DisplayName("重新授權要把撤銷標記清掉，否則按鈕看起來好的但不會動")
     void reAuthorizingClearsTheRevocation() {
         String userId = "U-reauth-" + UUID.randomUUID();

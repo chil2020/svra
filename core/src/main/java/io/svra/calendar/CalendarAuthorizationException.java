@@ -16,7 +16,32 @@ import io.svra.outbox.OutboxPermanentFailureException;
  */
 class CalendarAuthorizationException extends OutboxPermanentFailureException {
 
+    /** Google token endpoint 回的 error 代碼。不是從那條路來的就是 {@code null}。 */
+    private final String reason;
+
     CalendarAuthorizationException(String message) {
+        this(null, message);
+    }
+
+    CalendarAuthorizationException(String reason, String message) {
         super(message);
+        this.reason = reason;
+    }
+
+    /**
+     * 這個<b>使用者的</b> refresh token 確定沒了嗎？決定要不要把那一列標記撤銷。
+     *
+     * <p>🔴 <b>只有 token endpoint 的 {@code invalid_grant} 算數。</b>
+     * {@code invalid_client} 明確不算——那是應用程式的 client id/secret 壞了，
+     * 影響的是每一個人，而每個人的 refresh token 其實都還是好的。拿它去標記撤銷，
+     * 會把一次部署設定失誤放大成「所有人都得重跑授權腳本」。
+     *
+     * <p>Calendar API 那側的 401（見 {@link GoogleCalendarClient} 的 classify）
+     * 也不算：那裡沒有 token endpoint 的判斷，證據不夠強。
+     * <b>誤判的代價不對稱</b>——少標記一次，下次匯入再發現；多標記一次，
+     * 是逼一個授權好好的人去重跑腳本。所以預設（reason 為 null）是不撤銷。
+     */
+    boolean userGrantIsDead() {
+        return "invalid_grant".equals(reason);
     }
 }

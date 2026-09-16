@@ -7,7 +7,6 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import io.svra.user.Credentials;
-import io.svra.user.GoogleAuthorization;
 import io.svra.user.Users;
 
 /**
@@ -77,17 +76,24 @@ class CalendarCredentialsBootstrap {
     }
 
     private void seedOne(String lineUserId) {
-        GoogleAuthorization existing = credentials.find(lineUserId).orElse(null);
-        boolean unchanged = existing != null
-                && existing.refreshToken().equals(properties.refreshToken())
-                && existing.calendarId().equals(properties.calendarId())
-                && existing.scope().equals(SCOPE);
-        if (unchanged) {
+        // 🔴 比對要看得到「已撤銷」的那一列（storedMatches 而不是 find）。
+        //
+        // find() 查的是還有效的憑證，撤銷之後回空的——於是「.env 裡那顆已經被
+        // Google 拒掉的 token」會被讀成「這個人還沒有憑證」，每次啟動原封不動
+        // 種回去、順手把 revoked_at 清成 NULL。撤銷撐不過一次重啟，
+        // 而 log 會說「已用 .env 的設定更新憑證」，看起來像做了一件好事。
+        //
+        // 一模一樣就什麼都不做，**包括那一列已經被標記撤銷的時候**：
+        // 同一顆壞掉的 token 種第二次不會變好，只會把「我們已經知道它壞了」
+        // 這個事實抹掉。要讓它重新生效的唯一方式是換一顆——而那時
+        // storedMatches 自然就是 false，下面照樣會寫入並大聲說。
+        if (credentials.storedMatches(lineUserId, properties.refreshToken(),
+                properties.calendarId(), SCOPE)) {
             return;
         }
 
+        boolean existed = credentials.hasCredentialRow(lineUserId);
         credentials.store(lineUserId, properties.refreshToken(), properties.calendarId(), SCOPE);
-        log.warn("已用 .env 的設定{}這個使用者的行事曆憑證",
-                existing == null ? "建立" : "更新");
+        log.warn("已用 .env 的設定{}這個使用者的行事曆憑證", existed ? "更新" : "建立");
     }
 }
