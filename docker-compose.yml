@@ -71,6 +71,16 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    healthcheck:
+      # worker 連不上 rabbitmq 時不會死，它會退避重連（重開機時 rabbitmq 一定
+      # 比它晚起，那是對的）。代價是容器狀態永遠是 Up——少了這一關，一個打錯的
+      # host 名字就是一個看起來很健康的無限迴圈。這裡讓 Up 重新代表「真的在消費」。
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # rabbitmq 起來得比 worker 慢是正常的，不該在那段期間就判它 unhealthy
+      start_period: 90s
     restart: unless-stopped
 
   core:

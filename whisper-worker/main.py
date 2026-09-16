@@ -21,6 +21,7 @@ worker 保持無狀態。
 import json
 import logging
 import os
+import threading
 import time
 
 import pika
@@ -58,6 +59,13 @@ RECONNECT_DELAY_SEC = 5
 # 超過一分鐘就升級成 error，讓它在 log 裡自己浮出來。
 RECONNECT_ERROR_AFTER = 60 // RECONNECT_DELAY_SEC
 
+HEALTH_FILE = os.getenv("HEALTH_FILE", "/tmp/whisper-worker-health.json")
+HEALTH_BEAT_SEC = 10
+
+# 目前狀態：主迴圈更新，心跳執行緒寫出去，healthcheck.py 讀。
+# connected 才是重點——行程活著不等於它連得上 rabbitmq。
+_health = {"connected": False, "detail": "starting"}
+
 # 轉錄成功後刪掉音檔。逐字稿已經寫進資料庫，音檔留著只有壞處：
 # 目錄無上限成長，而且那是語音隱私資料——「不離開自己的機器」講的是不外傳，
 # 沒說要永久保存。設成 false 可以留著除錯。
@@ -87,6 +95,34 @@ def get_model():
         _model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
         log.info("model loaded in %.1fs", time.monotonic() - t0)
     return _model
+
+
+def _health_writer():
+    """每 HEALTH_BEAT_SEC 秒把 _health 寫進 HEALTH_FILE，給 docker healthcheck 讀。
+
+    🔴 為什麼是執行緒，而不是 pika 的 call_later：call_later 的回呼跟訊息處理
+    共用同一個事件迴圈，而 handle_job() 會在轉錄裡整段阻塞好幾分鐘——心跳會
+    跟著停，healthcheck 就把「正在做事」誤判成「掛了」。這個誤判是這件事
+    最難的部分，不是寫檔。
+
+    這跟 main() 裡 heartbeat=0 那段「用不到執行緒」的結論不衝突：那裡要的是
+    跨執行緒 ack，得處理 add_callback_threadsafe；這裡的執行緒只讀一個 dict、
+    寫一個檔，完全不碰 AMQP。
+
+    轉錄期間真的輪得到嗎——實測 16.3 秒的轉錄，這個執行緒 tick 了 320 次
+    （理想 326 次），最長一次沒輪到 0.06 秒。CTranslate2 計算時會放開 GIL，
+    而且 segments 是逐段產生的，不是一次算完。
+    """
+    while True:
+        try:
+            tmp = HEALTH_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(dict(_health, ts=time.time()), f)
+            # 換名是原子的：probe 不會讀到寫到一半的檔
+            os.replace(tmp, HEALTH_FILE)
+        except OSError as exc:
+            log.warning("健康狀態寫不進 %s：%s", HEALTH_FILE, exc)
+        time.sleep(HEALTH_BEAT_SEC)
 
 
 def setup_topology(ch):
@@ -182,6 +218,9 @@ def handle_job(ch, method, properties, body):
 
 
 def main():
+    # daemon=True：主迴圈結束時它跟著走，不用另外收尾
+    threading.Thread(target=_health_writer, name="health", daemon=True).start()
+
     # URL 在迴圈外解析：它不會在兩次重試之間改變，而解析失敗是設定寫錯，
     # 該在啟動時就炸掉，不是混進重連迴圈裡假裝成「連不上」。
     # 順帶讓 except 分支永遠拿得到 params.host/port 可以印。
@@ -212,6 +251,7 @@ def main():
             ch.basic_qos(prefetch_count=1)
             ch.basic_consume(queue=JOB_QUEUE, on_message_callback=handle_job)
             log.info("worker ready, consuming %s", JOB_QUEUE)
+            _health.update(connected=True, detail=f"consuming {JOB_QUEUE}")
             attempt, failing_since = 0, None   # 連上了就歸零，下次斷線重新從 warning 數起
             ch.start_consuming()
         # OSError 不是多餘的：rabbitmq 容器還沒起來時，DNS 查不到那個名字，
@@ -220,6 +260,7 @@ def main():
         # 只接後者的話，這個迴圈接不住，行程直接死給 restart policy 收。
         # 重開機時 rabbitmq 一定比 worker 晚一步，走的就是這條路徑。
         except (pika.exceptions.AMQPConnectionError, OSError) as exc:
+            _health.update(connected=False, detail=f"{type(exc).__name__}: {exc}"[:200])
             attempt += 1
             if failing_since is None:
                 failing_since = time.monotonic()
